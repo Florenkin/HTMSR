@@ -1,0 +1,5 @@
+C:/PROJECT/HTMSR/build/CMakeFiles/HTMSR.dir
+C:/PROJECT/HTMSR/build/CMakeFiles/htmsr_smoke_test.dir
+C:/PROJECT/HTMSR/build/CMakeFiles/RUN_TESTS.dir
+C:/PROJECT/HTMSR/build/CMakeFiles/ALL_BUILD.dir
+C:/PROJECT/HTMSR/build/CMakeFiles/ZERO_CHECK.dir
