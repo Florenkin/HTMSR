@@ -8,6 +8,99 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded PCL/VTK point cloud viewer" ON)
 
+function(htmsr_normalize_compile_definitions output_variable)
+    set(normalized_definitions)
+    foreach(definition IN LISTS ARGN)
+        if(NOT definition)
+            continue()
+        endif()
+
+        string(REPLACE " " ";" definition_parts "${definition}")
+        foreach(definition_part IN LISTS definition_parts)
+            if(NOT definition_part)
+                continue()
+            endif()
+
+            if(definition_part MATCHES "^\\$<")
+                list(APPEND normalized_definitions "${definition_part}")
+                continue()
+            endif()
+
+            string(REGEX REPLACE "^-D" "" definition_part "${definition_part}")
+            if(definition_part MATCHES "-D")
+                string(REPLACE "-D" ";" split_definitions "${definition_part}")
+            else()
+                set(split_definitions "${definition_part}")
+            endif()
+
+            foreach(split_definition IN LISTS split_definitions)
+                if(NOT split_definition)
+                    continue()
+                endif()
+
+                if(NOT split_definition MATCHES "^[A-Za-z_][A-Za-z0-9_]*(=.*)?$")
+                    message(FATAL_ERROR
+                        "Invalid compile definition detected: '${split_definition}'. "
+                        "Use target_compile_definitions(target PRIVATE MACRO or MACRO=value), "
+                        "never pass joined command-line fragments such as -DMACRO-DOTHER.")
+                endif()
+
+                list(APPEND normalized_definitions "${split_definition}")
+            endforeach()
+        endforeach()
+    endforeach()
+
+    if(normalized_definitions)
+        list(REMOVE_DUPLICATES normalized_definitions)
+    endif()
+    set(${output_variable} "${normalized_definitions}" PARENT_SCOPE)
+endfunction()
+
+function(htmsr_normalize_compile_options output_variable)
+    set(normalized_options)
+    foreach(option IN LISTS ARGN)
+        if(NOT option)
+            continue()
+        endif()
+
+        if(option MATCHES "^-D")
+            htmsr_normalize_compile_definitions(split_definitions "${option}")
+            foreach(split_definition IN LISTS split_definitions)
+                list(APPEND normalized_options "-D${split_definition}")
+            endforeach()
+        else()
+            list(APPEND normalized_options "${option}")
+        endif()
+    endforeach()
+
+    if(normalized_options)
+        list(REMOVE_DUPLICATES normalized_options)
+    endif()
+    set(${output_variable} "${normalized_options}" PARENT_SCOPE)
+endfunction()
+
+function(htmsr_sanitize_imported_compile_definitions)
+    foreach(imported_target IN LISTS ARGN)
+        if(NOT TARGET "${imported_target}")
+            continue()
+        endif()
+
+        get_target_property(imported_definitions "${imported_target}" INTERFACE_COMPILE_DEFINITIONS)
+        if(imported_definitions)
+            htmsr_normalize_compile_definitions(clean_definitions ${imported_definitions})
+            set_target_properties("${imported_target}" PROPERTIES
+                INTERFACE_COMPILE_DEFINITIONS "${clean_definitions}")
+        endif()
+
+        get_target_property(imported_options "${imported_target}" INTERFACE_COMPILE_OPTIONS)
+        if(imported_options)
+            htmsr_normalize_compile_options(clean_options ${imported_options})
+            set_target_properties("${imported_target}" PROPERTIES
+                INTERFACE_COMPILE_OPTIONS "${clean_options}")
+        endif()
+    endforeach()
+endfunction()
+
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 QUIET)
 if(NOT Eigen3_FOUND)
@@ -32,13 +125,20 @@ if(NOT Eigen3_FOUND)
     target_include_directories(Eigen3::Eigen INTERFACE "${HTMSR_EIGEN_INCLUDE_DIR}")
     message(STATUS "Using Eigen headers from ${HTMSR_EIGEN_INCLUDE_DIR}")
 endif()
+# PCL 1.12.1 的 Windows 安装包会在 PCLConfig.cmake 中使用 string(APPEND)
+# 追加 BOOST_DEFINITIONS。如果 Boost 包已经设置过同名变量，两个 -D 片段
+# 会被粘成 BOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB，导致 VS IntelliSense 报 E0992。
+# 这里在进入 PCL 配置前清空兼容变量，保留后续 target 级宏定义作为唯一来源。
+unset(BOOST_DEFINITIONS)
 find_package(PCL REQUIRED COMPONENTS common io visualization)
-remove_definitions(-DBOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB)
-get_directory_property(HTMSR_DIRECTORY_DEFINITIONS COMPILE_DEFINITIONS)
-if(HTMSR_DIRECTORY_DEFINITIONS)
-    list(REMOVE_ITEM HTMSR_DIRECTORY_DEFINITIONS "BOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB")
-    set_directory_properties(PROPERTIES COMPILE_DEFINITIONS "${HTMSR_DIRECTORY_DEFINITIONS}")
-endif()
+htmsr_normalize_compile_definitions(HTMSR_PCL_DEFINITIONS ${PCL_DEFINITIONS})
+set(PCL_DEFINITIONS "${HTMSR_PCL_DEFINITIONS}")
+htmsr_sanitize_imported_compile_definitions(${PCL_LIBRARIES})
+
+set(HTMSR_PCL_LINK_LIBRARIES)
+foreach(pcl_library IN LISTS PCL_LIBRARIES)
+    list(APPEND HTMSR_PCL_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
+endforeach()
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 
 set(CMAKE_AUTOMOC ON)
@@ -58,6 +158,7 @@ target_include_directories(htmsr_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${OpenCV_INCLUDE_DIRS}
+    PRIVATE
         ${PCL_INCLUDE_DIRS}
 )
 
@@ -65,7 +166,8 @@ target_link_libraries(htmsr_core
     PUBLIC
         Eigen3::Eigen
         ${OpenCV_LIBS}
-        ${PCL_LIBRARIES}
+    PRIVATE
+        ${HTMSR_PCL_LINK_LIBRARIES}
 )
 
 target_compile_definitions(htmsr_core
@@ -94,6 +196,7 @@ add_executable(htmsr_app WIN32
 target_include_directories(htmsr_app
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${PCL_INCLUDE_DIRS}
 )
 
 target_link_libraries(htmsr_app
@@ -116,7 +219,7 @@ if(HTMSR_ENABLE_VTK_VIEWER)
     )
 
     if(VTK_FOUND)
-        target_link_libraries(htmsr_app PRIVATE ${VTK_LIBRARIES})
+        target_link_libraries(htmsr_app PRIVATE ${HTMSR_PCL_LINK_LIBRARIES} ${VTK_LIBRARIES})
         target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=1)
         vtk_module_autoinit(
             TARGETS htmsr_app
