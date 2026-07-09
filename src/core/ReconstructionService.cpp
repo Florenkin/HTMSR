@@ -3,6 +3,9 @@
 #include "core/FileSystemUtils.h"
 #include "core/Logger.h"
 
+#include <Eigen/Cholesky>
+#include <Eigen/Geometry>
+#include <Eigen/LU>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/imgcodecs.hpp>

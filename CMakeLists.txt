@@ -9,8 +9,36 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded PCL/VTK point cloud viewer" ON)
 
 find_package(OpenCV REQUIRED)
-find_package(Eigen3 REQUIRED)
+find_package(Eigen3 QUIET)
+if(NOT Eigen3_FOUND)
+    set(HTMSR_EIGEN_INCLUDE_DIR "" CACHE PATH "Path to an Eigen include directory that contains Eigen/Core")
+    if(NOT HTMSR_EIGEN_INCLUDE_DIR)
+        foreach(candidate
+            "C:/ENVIORNMENT/ceresLib/Eigen"
+            "C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Eigen/eigen3"
+        )
+            if(EXISTS "${candidate}/Eigen/Core")
+                set(HTMSR_EIGEN_INCLUDE_DIR "${candidate}" CACHE PATH "Path to an Eigen include directory that contains Eigen/Core" FORCE)
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    if(NOT EXISTS "${HTMSR_EIGEN_INCLUDE_DIR}/Eigen/Core")
+        message(FATAL_ERROR "Eigen was not found. Set HTMSR_EIGEN_INCLUDE_DIR to a directory that contains Eigen/Core.")
+    endif()
+
+    add_library(Eigen3::Eigen INTERFACE IMPORTED)
+    target_include_directories(Eigen3::Eigen INTERFACE "${HTMSR_EIGEN_INCLUDE_DIR}")
+    message(STATUS "Using Eigen headers from ${HTMSR_EIGEN_INCLUDE_DIR}")
+endif()
 find_package(PCL REQUIRED COMPONENTS common io visualization)
+remove_definitions(-DBOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB)
+get_directory_property(HTMSR_DIRECTORY_DEFINITIONS COMPILE_DEFINITIONS)
+if(HTMSR_DIRECTORY_DEFINITIONS)
+    list(REMOVE_ITEM HTMSR_DIRECTORY_DEFINITIONS "BOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB")
+    set_directory_properties(PROPERTIES COMPILE_DEFINITIONS "${HTMSR_DIRECTORY_DEFINITIONS}")
+endif()
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 
 set(CMAKE_AUTOMOC ON)
@@ -40,9 +68,11 @@ target_link_libraries(htmsr_core
         ${PCL_LIBRARIES}
 )
 
-if(PCL_DEFINITIONS)
-    target_compile_options(htmsr_core PUBLIC ${PCL_DEFINITIONS})
-endif()
+target_compile_definitions(htmsr_core
+    PUBLIC
+        BOOST_ALL_NO_LIB
+        NOMINMAX
+)
 
 add_executable(htmsr_app WIN32
     src/app/main.cpp
