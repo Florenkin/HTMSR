@@ -16,6 +16,7 @@ namespace {
 
 cv::Mat toGray(const cv::Mat& input)
 {
+    // 标定角点检测统一使用灰度图，彩色图在这里转换为单通道图像。
     if (input.empty()) {
         return {};
     }
@@ -35,6 +36,7 @@ double computeReprojectionError(
     const cv::Mat& cameraMatrix,
     const cv::Mat& distortion)
 {
+    // 将三维棋盘角点重新投影到图像平面，用平均像素距离评价标定误差。
     std::vector<cv::Point2f> projected;
     cv::projectPoints(objectPoints, rvec, tvec, cameraMatrix, distortion, projected);
 
@@ -48,6 +50,7 @@ double computeReprojectionError(
 
 std::vector<cv::Mat> readImages(const std::vector<std::string>& paths)
 {
+    // 逐个读取图像，读取失败的文件只写日志，不中断整个标定流程。
     std::vector<cv::Mat> images;
     images.reserve(paths.size());
     for (const auto& path : paths) {
@@ -67,6 +70,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 {
     Logger::instance().info("Calibration", "Starting stereo calibration.");
 
+    // 读取左右标定图像路径，并按较短的一侧组成有效图像对。
     const auto leftPaths = listImageFiles(input.leftDirectory, input.imageRange);
     const auto rightPaths = listImageFiles(input.rightDirectory, input.imageRange);
     const int pairCount = static_cast<int>(std::min(leftPaths.size(), rightPaths.size()));
@@ -86,6 +90,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
         throw std::runtime_error("Calibration images could not be loaded.");
     }
 
+    // 先分别完成左右单目标定，得到两台相机各自的内参和畸变参数。
     const auto leftCalib = calibrateSingleCamera(leftImages, input.boardSize, input.squareSize, "Left");
     const auto rightCalib = calibrateSingleCamera(rightImages, input.boardSize, input.squareSize, "Right");
 
@@ -94,6 +99,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     std::vector<std::vector<cv::Point2f>> rightImagePoints;
     const auto objectPoints = createObjectPoints(input.boardSize, input.squareSize);
 
+    // 双目标定要求同一时刻的左右图都成功检测到棋盘角点。
     int failures = 0;
     for (int i = 0; i < pairCount; ++i) {
         cv::Mat leftGray = toGray(cv::imread(pairedLeft[i], cv::IMREAD_COLOR));
@@ -122,6 +128,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
             continue;
         }
 
+        // 继续做亚像素优化，提高双目外参求解精度。
         cv::cornerSubPix(leftGray, leftCorners, cv::Size(15, 15), cv::Size(-1, -1),
             cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1));
         cv::cornerSubPix(rightGray, rightCorners, cv::Size(15, 15), cv::Size(-1, -1),
@@ -137,6 +144,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     }
 
     CalibrationResult result;
+    // 单目标定结果作为双目标定初值，stereoCalibrate 中使用 CALIB_FIX_INTRINSIC 固定内参。
     result.K1 = leftCalib.cameraMatrix.clone();
     result.D1 = leftCalib.distortion.clone();
     result.K2 = rightCalib.cameraMatrix.clone();
@@ -149,6 +157,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     result.failedPairs = failures;
 
     cv::Size imageSize = leftImages.front().size();
+    // 在已知左右内参的基础上求解双目旋转、平移、本质矩阵和基础矩阵。
     result.rms = cv::stereoCalibrate(
         stereoObjectPoints,
         leftImagePoints,
@@ -174,6 +183,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 
 bool CalibrationService::loadCalibration(const std::string& filename, CalibrationResult& result) const
 {
+    // 保持 OpenCV FileStorage 格式，兼容参考代码生成的 yml 标定文件。
     cv::FileStorage fs(filename, cv::FileStorage::READ);
     if (!fs.isOpened()) {
         Logger::instance().error("Calibration", "Failed to open calibration file: " + filename);
@@ -192,6 +202,7 @@ bool CalibrationService::loadCalibration(const std::string& filename, Calibratio
     fs["E"] >> result.E;
     fs["F"] >> result.F;
 
+    // 旧标定文件可能没有 P1/P2，这里使用相机内参作为默认投影矩阵。
     if (result.P1.empty() && !result.K1.empty()) {
         result.P1 = result.K1.clone();
     }
@@ -207,6 +218,7 @@ bool CalibrationService::loadCalibration(const std::string& filename, Calibratio
 
 void CalibrationService::saveCalibration(const std::string& filename, const CalibrationResult& result) const
 {
+    // 写文件前先创建父目录，避免用户选择新输出目录时保存失败。
     ensureParentDirectory(filename);
     cv::FileStorage fs(filename, cv::FileStorage::WRITE);
     if (!fs.isOpened()) {
@@ -234,6 +246,7 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
     const cv::Size2d& squareSize,
     const std::string& cameraName) const
 {
+    // 单目标定流程：提取角点、生成对应世界坐标、执行 calibrateCamera 并计算误差。
     std::vector<std::vector<cv::Point2f>> imagePoints;
     std::vector<std::vector<cv::Point3f>> objectPoints;
     const auto objectTemplate = createObjectPoints(boardSize, squareSize);
@@ -248,6 +261,7 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
         }
         imageSize = gray.size();
 
+        // 使用 findChessboardCornersSB 增强棋盘角点检测稳定性。
         std::vector<cv::Point2f> corners;
         const bool found = cv::findChessboardCornersSB(
             gray,
@@ -261,6 +275,7 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
             continue;
         }
 
+        // 对粗提取角点继续做亚像素优化。
         cv::cornerSubPix(gray, corners, cv::Size(15, 15), cv::Size(-1, -1),
             cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.1));
         imagePoints.push_back(corners);
@@ -279,8 +294,10 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
 
     std::vector<cv::Mat> rvecs;
     std::vector<cv::Mat> tvecs;
+    // OpenCV 单目标定，求解相机内参、畸变参数和每幅图的外参。
     cv::calibrateCamera(objectPoints, imagePoints, imageSize, result.cameraMatrix, result.distortion, rvecs, tvecs);
 
+    // 对每一幅有效图像单独计算重投影误差，便于后续 UI 展示和质量判断。
     result.perImageErrors.reserve(imagePoints.size());
     for (size_t i = 0; i < imagePoints.size(); ++i) {
         result.perImageErrors.push_back(computeReprojectionError(
@@ -295,6 +312,7 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
 
 std::vector<cv::Point3f> CalibrationService::createObjectPoints(const cv::Size& boardSize, const cv::Size2d& squareSize) const
 {
+    // 假设标定板位于世界坐标系 z=0 平面，每个角点按实际方格尺寸排列。
     std::vector<cv::Point3f> points;
     points.reserve(static_cast<size_t>(boardSize.width * boardSize.height));
     for (int y = 0; y < boardSize.height; ++y) {

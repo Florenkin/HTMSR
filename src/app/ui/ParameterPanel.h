@@ -19,9 +19,40 @@ class ParameterPanel final : public QWidget {
 public:
     explicit ParameterPanel(QWidget* parent = nullptr);
 
+    /*
+        函数功能：将项目配置恢复到参数面板控件
+        输入：
+            config：项目配置数据
+        输出：
+            无
+    */
     void setProjectConfig(const AppProjectConfig& config);
+
+    /*
+        函数功能：从参数面板读取完整项目配置
+        输入：
+            无
+        输出：
+            返回值：当前 UI 中的项目路径、标定参数和重建参数
+    */
     AppProjectConfig projectConfig() const;
+
+    /*
+        函数功能：从参数面板读取双目标定输入参数
+        输入：
+            无
+        输出：
+            返回值：标定目录、棋盘格参数、图像范围和输出文件路径
+    */
     CalibrationInput calibrationInput() const;
+
+    /*
+        函数功能：从参数面板读取离线重建输入参数
+        输入：
+            calibration：当前可用的双目标定结果
+        输出：
+            返回值：重建目录、标定结果、线提取参数和匹配阈值
+    */
     ReconstructionInput reconstructionInput(const CalibrationResult& calibration) const;
 
 private:

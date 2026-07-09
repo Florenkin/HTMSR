@@ -11,6 +11,7 @@ namespace htmsr::app {
 
 OfflineImageSequenceProvider::OfflineImageSequenceProvider(std::string leftDirectory, std::string rightDirectory, ImageRange range)
 {
+    // 离线采集源按目录读取左右图像，并按较短的一侧截断成有效图像对。
     leftPaths_ = listImageFiles(leftDirectory, range);
     rightPaths_ = listImageFiles(rightDirectory, range);
     const size_t paired = std::min(leftPaths_.size(), rightPaths_.size());
@@ -34,6 +35,7 @@ FramePair OfflineImageSequenceProvider::next()
         throw std::runtime_error("Offline image sequence has no more frames.");
     }
 
+    // 每次调用返回一组左右图像，同时保留原始路径用于日志和调试。
     FramePair pair;
     pair.leftPath = leftPaths_[index_];
     pair.rightPath = rightPaths_[index_];
@@ -45,6 +47,7 @@ FramePair OfflineImageSequenceProvider::next()
 
 void OfflineImageSequenceProvider::reset()
 {
+    // 重置读取位置，便于同一组离线图像重复处理。
     index_ = 0;
 }
 

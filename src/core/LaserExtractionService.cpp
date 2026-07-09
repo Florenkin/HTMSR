@@ -13,6 +13,7 @@ namespace {
 
 int channelIndex(LaserColor color)
 {
+    // OpenCV 彩色图像默认通道顺序为 BGR。
     switch (color) {
     case LaserColor::Blue:
         return 0;
@@ -28,6 +29,7 @@ int channelIndex(LaserColor color)
 
 cv::Mat toLaserGray(const cv::Mat& image, LaserColor color)
 {
+    // 根据激光颜色选择对应通道；灰度模式下直接转换为单通道图像。
     if (image.channels() == 1 || color == LaserColor::Gray) {
         cv::Mat gray;
         if (image.channels() == 1) {
@@ -45,6 +47,7 @@ cv::Mat toLaserGray(const cv::Mat& image, LaserColor color)
 
 cv::Mat thresholdLaser(const cv::Mat& image, LaserColor color, double threshold)
 {
+    // 先按颜色通道提取激光灰度图，再通过阈值分割获得亮条纹区域。
     cv::Mat gray = toLaserGray(image, color);
     cv::Mat binary;
     cv::threshold(gray, binary, threshold, 255.0, cv::THRESH_BINARY);
@@ -54,6 +57,7 @@ cv::Mat thresholdLaser(const cv::Mat& image, LaserColor color, double threshold)
 
 std::vector<cv::Rect> connectedRanges(const cv::Mat& binary, double minArea, int border)
 {
+    // 根据二值图中的连通区域估计激光条纹所在范围，减少后续逐像素计算量。
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
@@ -82,6 +86,7 @@ std::vector<cv::Rect> connectedRanges(const cv::Mat& binary, double minArea, int
 
 cv::Mat makePreview(const cv::Mat& image)
 {
+    // 预览图统一使用 BGR 彩色图，便于在上面绘制红色中心线点。
     cv::Mat preview;
     if (image.channels() == 1) {
         cv::cvtColor(image, preview, cv::COLOR_GRAY2BGR);
@@ -93,6 +98,7 @@ cv::Mat makePreview(const cv::Mat& image)
 
 void trimEndpoints(std::vector<Eigen::Vector2d>& points, const LaserExtractionConfig& config)
 {
+    // 去除首尾若干点，减少激光条纹端点区域的检测波动。
     if (!config.removeEndPoints || config.removeEndPointCount <= 0) {
         return;
     }
@@ -113,11 +119,13 @@ LaserExtractionResult LaserExtractionService::extract(const cv::Mat& image, cons
         throw std::runtime_error("Cannot extract laser centerline from an empty image.");
     }
 
+    // 用户输入的 ROI 可能超过图像边界，先裁剪到合法范围。
     const cv::Rect safeRoi = clampRoi(image, roi);
     if (safeRoi.empty()) {
         throw std::runtime_error("Laser ROI is outside image bounds.");
     }
 
+    // 根据参数选择灰度重心法或 Steger 法。
     if (config.mode == LaserExtractionMode::Steger) {
         return extractSteger(image, safeRoi, config);
     }
@@ -129,12 +137,14 @@ LaserExtractionResult LaserExtractionService::extractGrayCentroid(
     const cv::Rect& roi,
     const LaserExtractionConfig& config) const
 {
+    // 灰度重心法：在每一行内按灰度值加权求激光中心位置。
     const cv::Mat roiImage = image(roi).clone();
     cv::Mat gray = toLaserGray(roiImage, config.laserColor);
     cv::Mat binary;
     cv::threshold(gray, binary, config.grayThreshold, 255, cv::THRESH_BINARY);
     cv::morphologyEx(binary, binary, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
 
+    // 二值图用于限制有效区域，避免背景噪声参与中心计算。
     cv::Mat filtered;
     gray.copyTo(filtered, binary);
 
@@ -148,6 +158,7 @@ LaserExtractionResult LaserExtractionService::extractGrayCentroid(
 
     for (const auto& range : ranges) {
         for (int y = range.y; y < range.y + range.height; ++y) {
+            // 对当前行的亮像素做加权平均，得到亚像素级 x 坐标。
             double weighted = 0.0;
             double total = 0.0;
 
@@ -181,6 +192,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
     const cv::Rect& roi,
     const LaserExtractionConfig& config) const
 {
+    // Steger 法：利用高斯导数和 Hessian 矩阵提取条纹亚像素中心。
     const cv::Mat roiImage = image(roi).clone();
     cv::Mat gray = toLaserGray(roiImage, config.laserColor);
     cv::Mat binary = thresholdLaser(roiImage, config.laserColor, config.binaryThreshold);
@@ -193,6 +205,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
         return result;
     }
 
+    // 根据线宽估计高斯核尺度，参考公式 sigma = stripeWidth / sqrt(3)。
     const double sigma = std::max(0.5, config.stripeWidth / std::sqrt(3.0));
     const int radius = std::max(1, static_cast<int>(std::round(3.0 * sigma)));
     const int kernelSize = 2 * radius + 1;
@@ -206,6 +219,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
         }
     }
 
+    // 手动构造一阶和二阶高斯导数核，便于后续卷积求 Hessian。
     cv::Mat expTerm;
     cv::exp(-(X.mul(X) + Y.mul(Y)) / (2.0 * sigma * sigma), expTerm);
     cv::Mat dGx = (1.0 / (2.0 * CV_PI * std::pow(sigma, 4))) * (-X).mul(expTerm);
@@ -221,6 +235,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
 
     cv::Mat visited = cv::Mat::zeros(gray.size(), CV_8UC1);
     for (const auto& range : ranges) {
+        // 每个连通区域单独计算导数，降低无效背景区域的计算量。
         cv::Mat patch = gray(range).clone();
         patch.convertTo(patch, CV_64F);
 
@@ -246,6 +261,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
                 const double a = dxx.at<double>(y, x);
                 const double b = dxy.at<double>(y, x);
                 const double c = dyy.at<double>(y, x);
+                // 根据 Hessian 特征方向估计激光条纹法线方向。
                 const double trace = a + c;
                 const double diff = a - c;
                 const double root = std::sqrt(diff * diff + 4.0 * b * b);
@@ -266,6 +282,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
                 nx /= mag;
                 ny /= mag;
 
+                // 沿法线方向求亚像素偏移，偏移过大说明该点不稳定。
                 const double denominator = a * nx * nx + 2.0 * b * nx * ny + c * ny * ny;
                 if (std::abs(denominator) < 1e-9) {
                     continue;
@@ -283,6 +300,7 @@ LaserExtractionResult LaserExtractionService::extractSteger(
         }
 
         if (config.filterStegerPoints) {
+            // 同一行可能产生多个候选点，取中间位置作为该行最终中心点。
             for (size_t i = 0; i < rowCandidates.size();) {
                 size_t j = i + 1;
                 while (j < rowCandidates.size() && pixelCandidates[j].y == pixelCandidates[i].y) {

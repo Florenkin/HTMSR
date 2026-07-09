@@ -4,6 +4,7 @@ namespace htmsr {
 
 Logger& Logger::instance()
 {
+    // 使用函数内静态变量保证首次使用时初始化。
     static Logger logger;
     return logger;
 }
@@ -44,6 +45,7 @@ void Logger::log(LogLevel level, const std::string& module, const std::string& t
 {
     std::vector<Sink> sinks;
     {
+        // 先复制接收器列表，再在锁外回调，避免 UI 回调中再次写日志造成死锁。
         std::lock_guard<std::mutex> lock(mutex_);
         sinks = sinks_;
     }

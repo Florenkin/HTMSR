@@ -31,6 +31,7 @@ PointCloudViewWidget::PointCloudViewWidget(QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
 
 #if HTMSR_WITH_VTK_VIEWER
+    // VTK Qt 组件可用时，内嵌 PCLVisualizer 作为点云交互视图。
     impl_->widget = new QVTKOpenGLNativeWidget(this);
     impl_->viewer = pcl::visualization::PCLVisualizer::Ptr(new pcl::visualization::PCLVisualizer("HTMSR Viewer", false));
     impl_->widget->setRenderWindow(impl_->viewer->getRenderWindow());
@@ -39,6 +40,7 @@ PointCloudViewWidget::PointCloudViewWidget(QWidget* parent)
     impl_->viewer->addCoordinateSystem(30.0);
     layout->addWidget(impl_->widget);
 #else
+    // 当前环境缺少 VTK Qt 组件时使用占位视图，保证其他功能仍可运行。
     impl_->placeholder = new QLabel(QString::fromUtf8("点云视图需要 VTK Qt 组件。当前构建使用占位视图。"));
     impl_->placeholder->setAlignment(Qt::AlignCenter);
     impl_->placeholder->setStyleSheet("background:#9a9a9a;color:#202020;");
@@ -51,6 +53,7 @@ PointCloudViewWidget::~PointCloudViewWidget() = default;
 void PointCloudViewWidget::setPoints(const std::vector<Eigen::Vector3d>& points)
 {
 #if HTMSR_WITH_VTK_VIEWER
+    // 将 Eigen 点集合转换为 PCL 点云，并刷新三维视图。
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     cloud->height = 1;
     cloud->width = static_cast<std::uint32_t>(points.size());
@@ -70,6 +73,7 @@ void PointCloudViewWidget::setPoints(const std::vector<Eigen::Vector3d>& points)
     impl_->viewer->resetCamera();
     impl_->widget->renderWindow()->Render();
 #else
+    // 占位模式下至少显示点云数量，方便验证重建流程是否产生结果。
     impl_->placeholder->setText(QString::fromUtf8("点云数量: %1\nVTK Qt 组件未启用").arg(points.size()));
 #endif
 }

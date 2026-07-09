@@ -17,11 +17,13 @@ namespace {
 
 std::string textOf(const QLineEdit* edit)
 {
+    // 统一从 Qt 文本控件转换为标准字符串，便于核心层使用。
     return edit->text().toStdString();
 }
 
 cv::Rect makeRect(const QSpinBox* x, const QSpinBox* y, const QSpinBox* w, const QSpinBox* h)
 {
+    // ROI 参数在界面上拆成 x/y/w/h 四个输入框，这里重新组装为 OpenCV 矩形。
     return cv::Rect(x->value(), y->value(), w->value(), h->value());
 }
 
@@ -32,6 +34,7 @@ ParameterPanel::ParameterPanel(QWidget* parent)
 {
     auto* tabs = new QTabWidget;
 
+    // 项目页：维护左右图像目录、标定文件路径和输出目录。
     auto* projectPage = new QWidget;
     auto* projectLayout = new QFormLayout(projectPage);
     leftCalibrationEdit_ = createPathRow(projectLayout, QString::fromUtf8("左标定目录"), true);
@@ -42,6 +45,7 @@ ParameterPanel::ParameterPanel(QWidget* parent)
     outputDirectoryEdit_ = createPathRow(projectLayout, QString::fromUtf8("输出目录"), true);
     tabs->addTab(projectPage, QString::fromUtf8("项目"));
 
+    // 标定页：维护棋盘格规格、方格实际尺寸和图像处理范围。
     auto* calibrationPage = new QWidget;
     auto* calibrationLayout = new QFormLayout(calibrationPage);
     boardWidthSpin_ = new QSpinBox;
@@ -70,6 +74,7 @@ ParameterPanel::ParameterPanel(QWidget* parent)
     calibrationLayout->addRow(QString::fromUtf8("结束索引"), imageEndSpin_);
     tabs->addTab(calibrationPage, QString::fromUtf8("标定"));
 
+    // 重建页：维护激光中心线提取、ROI 和左右匹配相关参数。
     auto* reconstructionPage = new QWidget;
     auto* reconstructionLayout = new QFormLayout(reconstructionPage);
     laserModeCombo_ = new QComboBox;
@@ -118,6 +123,7 @@ ParameterPanel::ParameterPanel(QWidget* parent)
     reconstructionLayout->addRow(QString::fromUtf8("端点数量"), removeEndpointCountSpin_);
     tabs->addTab(reconstructionPage, QString::fromUtf8("重建"));
 
+    // 采集页暂时作为在线采集预留入口，后续接入相机 SDK 时扩展。
     auto* acquisitionPage = new QWidget;
     auto* acquisitionLayout = new QFormLayout(acquisitionPage);
     acquisitionLayout->addRow(QString::fromUtf8("设备状态"), new QLineEdit(QString::fromUtf8("预留接口，未连接真实设备")));
@@ -131,6 +137,7 @@ ParameterPanel::ParameterPanel(QWidget* parent)
 
 void ParameterPanel::setProjectConfig(const AppProjectConfig& config)
 {
+    // 将持久化配置写回界面控件，保证软件重启后能恢复上次参数。
     leftCalibrationEdit_->setText(QString::fromStdString(config.leftCalibrationDirectory));
     rightCalibrationEdit_->setText(QString::fromStdString(config.rightCalibrationDirectory));
     leftReconstructionEdit_->setText(QString::fromStdString(config.leftReconstructionDirectory));
@@ -169,6 +176,7 @@ void ParameterPanel::setProjectConfig(const AppProjectConfig& config)
 
 AppProjectConfig ParameterPanel::projectConfig() const
 {
+    // 收集当前界面上的所有项目参数，用于保存和刷新资源树。
     AppProjectConfig config;
     config.leftCalibrationDirectory = textOf(leftCalibrationEdit_);
     config.rightCalibrationDirectory = textOf(rightCalibrationEdit_);
@@ -184,6 +192,7 @@ AppProjectConfig ParameterPanel::projectConfig() const
 
 CalibrationInput ParameterPanel::calibrationInput() const
 {
+    // 将 UI 控件值转换为核心标定服务所需的数据对象。
     CalibrationInput input;
     input.leftDirectory = textOf(leftCalibrationEdit_);
     input.rightDirectory = textOf(rightCalibrationEdit_);
@@ -196,6 +205,7 @@ CalibrationInput ParameterPanel::calibrationInput() const
 
 ReconstructionInput ParameterPanel::reconstructionInput(const CalibrationResult& calibration) const
 {
+    // 将 UI 控件值转换为核心重建服务所需的数据对象。
     ReconstructionInput input;
     input.leftDirectory = textOf(leftReconstructionEdit_);
     input.rightDirectory = textOf(rightReconstructionEdit_);
@@ -218,6 +228,7 @@ ReconstructionInput ParameterPanel::reconstructionInput(const CalibrationResult&
 
 QLineEdit* ParameterPanel::createPathRow(QFormLayout* form, const QString& label, bool directory)
 {
+    // 路径输入统一使用“文本框 + ...按钮”的形式，目录和文件选择共用该函数。
     auto* edit = new QLineEdit;
     auto* button = new QPushButton(QString::fromUtf8("..."));
     button->setFixedWidth(28);

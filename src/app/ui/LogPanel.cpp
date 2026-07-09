@@ -12,6 +12,7 @@ namespace htmsr::app {
 LogPanel::LogPanel(QWidget* parent)
     : QWidget(parent)
 {
+    // 日志表固定为时间、级别、模块、消息四列，方便定位算法流程问题。
     table_ = new QTableWidget(0, 4);
     table_->setHorizontalHeaderLabels({
         QString::fromUtf8("时间"),
@@ -31,6 +32,7 @@ LogPanel::LogPanel(QWidget* parent)
 
 void LogPanel::appendMessage(const htmsr::LogMessage& message)
 {
+    // 每条日志追加到表格末尾，并自动滚动到底部。
     const int row = table_->rowCount();
     table_->insertRow(row);
     table_->setItem(row, 0, new QTableWidgetItem(QDateTime::currentDateTime().toString("HH:mm:ss.zzz")));

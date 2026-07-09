@@ -10,6 +10,7 @@ namespace {
 
 std::string toLower(std::string value)
 {
+    // 扩展名比较统一转为小写，避免 Windows 下大小写混用导致漏读。
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
@@ -18,6 +19,7 @@ std::string toLower(std::string value)
 
 bool isImageExtension(const std::filesystem::path& path)
 {
+    // 当前离线流程支持常见相机图像格式。
     const auto ext = toLower(path.extension().string());
     return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".tif" || ext == ".tiff";
 }
@@ -32,6 +34,7 @@ std::vector<std::string> listImageFiles(const std::string& directory, const Imag
         throw std::runtime_error("Image directory does not exist: " + directory);
     }
 
+    // 递归扫描目录，收集所有可用图像路径。
     std::vector<std::string> files;
     for (const auto& entry : fs::recursive_directory_iterator(directory)) {
         if (entry.is_regular_file() && isImageExtension(entry.path())) {
@@ -39,8 +42,10 @@ std::vector<std::string> listImageFiles(const std::string& directory, const Imag
         }
     }
 
+    // 按文件名排序，保证左右目录在命名一致时能够稳定配对。
     std::sort(files.begin(), files.end());
 
+    // (-1, -1) 表示保留全部图像。
     if (range.begin == -1 && range.end == -1) {
         return files;
     }
@@ -49,6 +54,7 @@ std::vector<std::string> listImageFiles(const std::string& directory, const Imag
         return files;
     }
 
+    // 对索引范围做边界裁剪，避免用户输入越界导致崩溃。
     const int first = std::max(0, range.begin);
     const int last = std::min(range.end, static_cast<int>(files.size()) - 1);
     if (first > last) {
@@ -66,6 +72,7 @@ bool ensureParentDirectory(const std::string& filePath)
     if (parent.empty()) {
         return true;
     }
+    // 父目录不存在时自动创建，便于保存标定文件和点云文件。
     return fs::exists(parent) || fs::create_directories(parent);
 }
 

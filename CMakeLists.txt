@@ -74,6 +74,10 @@ target_compile_definitions(htmsr_core
         NOMINMAX
 )
 
+if(MSVC)
+    target_compile_options(htmsr_core PRIVATE /utf-8)
+endif()
+
 add_executable(htmsr_app WIN32
     src/app/main.cpp
     src/app/acquisition/AcquisitionTypes.cpp
@@ -98,6 +102,10 @@ target_link_libraries(htmsr_app
         Qt6::Widgets
         Qt6::Concurrent
 )
+
+if(MSVC)
+    target_compile_options(htmsr_app PRIVATE /utf-8)
+endif()
 
 if(HTMSR_ENABLE_VTK_VIEWER)
     find_package(VTK QUIET COMPONENTS

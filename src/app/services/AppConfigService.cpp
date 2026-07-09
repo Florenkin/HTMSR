@@ -8,6 +8,7 @@ namespace {
 
 std::string readString(QSettings& settings, const char* key, const std::string& fallback = {})
 {
+    // QSettings 使用 QVariant 保存，这里统一转换为 std::string。
     return settings.value(key, QString::fromStdString(fallback)).toString().toStdString();
 }
 
@@ -20,6 +21,7 @@ void writeString(QSettings& settings, const char* key, const std::string& value)
 
 AppProjectConfig AppConfigService::load() const
 {
+    // 组织名和应用名固定为 HTMSR，Windows 下会保存到注册表或 Qt 默认配置位置。
     QSettings settings("HTMSR", "HTMSR");
     AppProjectConfig config;
     config.leftCalibrationDirectory = readString(settings, "paths/leftCalibration");
@@ -68,6 +70,7 @@ AppProjectConfig AppConfigService::load() const
 
 void AppConfigService::save(const AppProjectConfig& config) const
 {
+    // 保存路径、标定参数和重建参数，便于下次启动直接恢复工作现场。
     QSettings settings("HTMSR", "HTMSR");
     writeString(settings, "paths/leftCalibration", config.leftCalibrationDirectory);
     writeString(settings, "paths/rightCalibration", config.rightCalibrationDirectory);
