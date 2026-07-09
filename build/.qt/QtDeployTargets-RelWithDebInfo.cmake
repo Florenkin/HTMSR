@@ -1,6 +1,0 @@
-set(__QT_DEPLOY_TARGET_HTMSR_FILE C:/PROJECT/HTMSR/build/RelWithDebInfo/HTMSR.exe)
-set(__QT_DEPLOY_TARGET_HTMSR_TYPE EXECUTABLE)
-set(__QT_DEPLOY_TARGET_HTMSR_RUNTIME_DLLS C:/ENVIORNMENT/qt/6.11.1/msvc2022_64/bin/Qt6Widgets.dll;C:/ENVIORNMENT/qt/6.11.1/msvc2022_64/bin/Qt6Gui.dll;C:/ENVIORNMENT/qt/6.11.1/msvc2022_64/bin/Qt6Core.dll)
-set(__QT_DEPLOY_TARGET_htmsr_smoke_test_FILE C:/PROJECT/HTMSR/build/RelWithDebInfo/htmsr_smoke_test.exe)
-set(__QT_DEPLOY_TARGET_htmsr_smoke_test_TYPE EXECUTABLE)
-set(__QT_DEPLOY_TARGET_htmsr_smoke_test_RUNTIME_DLLS C:/ENVIORNMENT/qt/6.11.1/msvc2022_64/bin/Qt6Core.dll)

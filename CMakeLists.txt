@@ -1,101 +1,103 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.24)
 
-project(HTMSR LANGUAGES CXX)
+project(HTMSR VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded PCL/VTK point cloud viewer" ON)
+
+find_package(OpenCV REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(PCL REQUIRED COMPONENTS common io visualization)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTOUIC OFF)
 
-if(MSVC)
-    add_compile_options(/utf-8 /EHsc /bigobj)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
-endif()
-
-set(HTMSR_DEFAULT_QT_ROOT "C:/ENVIORNMENT/qt/6.11.1/msvc2022_64")
-if(EXISTS "${HTMSR_DEFAULT_QT_ROOT}")
-    list(APPEND CMAKE_PREFIX_PATH "${HTMSR_DEFAULT_QT_ROOT}")
-endif()
-
-if(NOT OpenCV_DIR AND EXISTS "C:/ENVIORNMENT/opencv_450_vs2019/OpenCVConfig.cmake")
-    set(OpenCV_DIR "C:/ENVIORNMENT/opencv_450_vs2019" CACHE PATH "OpenCV config root")
-endif()
-
-if(NOT PCL_DIR AND EXISTS "C:/ENVIORNMENT/PCL/PCL 1.12.1/cmake/PCLConfig.cmake")
-    set(PCL_DIR "C:/ENVIORNMENT/PCL/PCL 1.12.1/cmake" CACHE PATH "PCL config root")
-endif()
-
-set(HTMSR_EIGEN_INCLUDE_DIR "C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Eigen/eigen3")
-
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
-find_package(OpenCV REQUIRED CONFIG)
-find_package(PCL REQUIRED COMPONENTS common io)
-
-set(HTMSR_OPENCV_ROOT "C:/ENVIORNMENT/opencv_450_vs2019")
-set(HTMSR_OPENCV_INCLUDE_DIR "${HTMSR_OPENCV_ROOT}/include")
-set(HTMSR_OPENCV_LIB_DIR "${HTMSR_OPENCV_ROOT}/x64/vc16/lib")
-
-set(HTMSR_OPENCV_LIBS
-    optimized opencv_core450
-    optimized opencv_imgproc450
-    optimized opencv_imgcodecs450
-    optimized opencv_calib3d450
-    debug opencv_core450d
-    debug opencv_imgproc450d
-    debug opencv_imgcodecs450d
-    debug opencv_calib3d450d
+add_library(htmsr_core
+    src/core/CalibrationService.cpp
+    src/core/FileSystemUtils.cpp
+    src/core/LaserExtractionService.cpp
+    src/core/Logger.cpp
+    src/core/PointCloudService.cpp
+    src/core/ReconstructionService.cpp
 )
 
-set(HTMSR_SOURCES
-    src/main.cpp
-    src/project_core/project_document.cpp
-    src/project_core/project_service.cpp
-    src/project_core/manifest_service.cpp
-    src/io_export/opencorr_poi_codec.cpp
-    src/io_export/result_exporter.cpp
-    src/algorithms/gray_centerline_extractor.cpp
-    src/algorithms/steger_centerline_extractor.cpp
-    src/algorithms/multithreshold_centerline_extractor.cpp
-    src/algorithms/centerline_extractor_factory.cpp
-    src/reconstruction_core/stereo_calibration_loader.cpp
-    src/reconstruction_core/epipolar_line_matcher.cpp
-    src/reconstruction_core/stereo_line_laser_reconstruction_engine.cpp
-    src/reconstruction_core/reconstruction_session_service.cpp
-    src/visualization/image_view_widget.cpp
-    src/visualization/pointcloud_summary_widget.cpp
-    src/app_shell/ribbon_widget.cpp
-    src/app_shell/main_window.cpp
+target_include_directories(htmsr_core
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${OpenCV_INCLUDE_DIRS}
+        ${PCL_INCLUDE_DIRS}
 )
 
-add_executable(HTMSR ${HTMSR_SOURCES})
-
-target_include_directories(HTMSR PRIVATE src)
-target_include_directories(HTMSR PRIVATE ${HTMSR_OPENCV_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
-target_include_directories(HTMSR PRIVATE ${HTMSR_EIGEN_INCLUDE_DIR} ${PCL_INCLUDE_DIRS})
-target_link_directories(HTMSR PRIVATE ${HTMSR_OPENCV_LIB_DIR} ${PCL_LIBRARY_DIRS})
-target_compile_options(HTMSR PRIVATE ${PCL_DEFINITIONS})
-
-target_link_libraries(HTMSR PRIVATE
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Widgets
-    ${OpenCV_LIBS}
-    ${HTMSR_OPENCV_LIBS}
-    ${PCL_LIBRARIES}
+target_link_libraries(htmsr_core
+    PUBLIC
+        Eigen3::Eigen
+        ${OpenCV_LIBS}
+        ${PCL_LIBRARIES}
 )
 
-enable_testing()
+if(PCL_DEFINITIONS)
+    target_compile_options(htmsr_core PUBLIC ${PCL_DEFINITIONS})
+endif()
 
-add_executable(htmsr_smoke_test
-    tests/smoke_test.cpp
-    src/project_core/project_document.cpp
-    src/project_core/project_service.cpp
-    src/project_core/manifest_service.cpp
-    src/io_export/opencorr_poi_codec.cpp
+add_executable(htmsr_app WIN32
+    src/app/main.cpp
+    src/app/acquisition/AcquisitionTypes.cpp
+    src/app/acquisition/OfflineImageSequenceProvider.cpp
+    src/app/services/AppConfigService.cpp
+    src/app/services/QtLogSink.cpp
+    src/app/ui/ImageViewWidget.cpp
+    src/app/ui/LogPanel.cpp
+    src/app/ui/MainWindow.cpp
+    src/app/ui/ParameterPanel.cpp
+    src/app/ui/PointCloudViewWidget.cpp
 )
 
-target_include_directories(htmsr_smoke_test PRIVATE src)
-target_link_libraries(htmsr_smoke_test PRIVATE Qt6::Core)
+target_include_directories(htmsr_app
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 
-add_test(NAME htmsr_smoke_test COMMAND htmsr_smoke_test)
+target_link_libraries(htmsr_app
+    PRIVATE
+        htmsr_core
+        Qt6::Widgets
+        Qt6::Concurrent
+)
+
+if(HTMSR_ENABLE_VTK_VIEWER)
+    find_package(VTK QUIET COMPONENTS
+        GUISupportQt
+        RenderingCore
+        RenderingOpenGL2
+        InteractionStyle
+    )
+
+    if(VTK_FOUND)
+        target_link_libraries(htmsr_app PRIVATE ${VTK_LIBRARIES})
+        target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=1)
+        vtk_module_autoinit(
+            TARGETS htmsr_app
+            MODULES ${VTK_LIBRARIES}
+        )
+    else()
+        message(WARNING "VTK Qt components were not found. Building with a placeholder point cloud view.")
+        target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=0)
+    endif()
+else()
+    target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=0)
+endif()
+
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "Source" FILES
+    src/core/CalibrationService.cpp
+    src/core/FileSystemUtils.cpp
+    src/core/LaserExtractionService.cpp
+    src/core/Logger.cpp
+    src/core/PointCloudService.cpp
+    src/core/ReconstructionService.cpp
+    src/app/main.cpp
+)
