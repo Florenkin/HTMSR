@@ -139,7 +139,7 @@ set(HTMSR_PCL_LINK_LIBRARIES)
 foreach(pcl_library IN LISTS PCL_LIBRARIES)
     list(APPEND HTMSR_PCL_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
 endforeach()
-find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
+find_package(Qt5 REQUIRED COMPONENTS Widgets Concurrent OpenGL)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -202,8 +202,9 @@ target_include_directories(htmsr_app
 target_link_libraries(htmsr_app
     PRIVATE
         htmsr_core
-        Qt6::Widgets
-        Qt6::Concurrent
+        Qt5::Widgets
+        Qt5::Concurrent
+        Qt5::OpenGL
 )
 
 if(MSVC)

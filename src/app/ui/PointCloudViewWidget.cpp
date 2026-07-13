@@ -9,6 +9,9 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/visualization/pcl_visualizer.h>
+#include <vtkGenericOpenGLRenderWindow.h>
+#include <vtkRenderer.h>
+#include <vtkSmartPointer.h>
 #endif
 
 namespace htmsr::app {
@@ -18,6 +21,8 @@ public:
 #if HTMSR_WITH_VTK_VIEWER
     QVTKOpenGLNativeWidget* widget = nullptr;
     pcl::visualization::PCLVisualizer::Ptr viewer;
+    vtkSmartPointer<vtkGenericOpenGLRenderWindow> renderWindow;
+    vtkSmartPointer<vtkRenderer> renderer;
 #else
     QLabel* placeholder = nullptr;
 #endif
@@ -33,8 +38,16 @@ PointCloudViewWidget::PointCloudViewWidget(QWidget* parent)
 #if HTMSR_WITH_VTK_VIEWER
     // VTK Qt 组件可用时，内嵌 PCLVisualizer 作为点云交互视图。
     impl_->widget = new QVTKOpenGLNativeWidget(this);
-    impl_->viewer = pcl::visualization::PCLVisualizer::Ptr(new pcl::visualization::PCLVisualizer("HTMSR Viewer", false));
-    impl_->widget->setRenderWindow(impl_->viewer->getRenderWindow());
+    impl_->renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
+    impl_->widget->setRenderWindow(impl_->renderWindow);
+
+    impl_->renderer = vtkSmartPointer<vtkRenderer>::New();
+    impl_->viewer = pcl::visualization::PCLVisualizer::Ptr(
+        new pcl::visualization::PCLVisualizer(
+            impl_->renderer,
+            impl_->renderWindow,
+            "HTMSR Viewer",
+            false));
     impl_->viewer->setupInteractor(impl_->widget->interactor(), impl_->widget->renderWindow());
     impl_->viewer->setBackgroundColor(0.78, 0.78, 0.78);
     impl_->viewer->addCoordinateSystem(30.0);

@@ -3,18 +3,18 @@
   "configurePresets": [
     {
       "name": "vs2022-x64-debug",
-      "displayName": "Visual Studio 2022 x64 Debug",
+      "displayName": "Visual Studio 2022 x64 Debug (Qt 5.15.2)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/vs2022-x64-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "HTMSR_ENABLE_VTK_VIEWER": "ON",
-        "CMAKE_PREFIX_PATH": "C:/ENVIORNMENT/qt/6.11.1/msvc2022_64;C:/ENVIORNMENT/opencv_450_vs2019/x64/vc16/lib;C:/ENVIORNMENT/PCL/PCL 1.12.1;C:/ENVIORNMENT/PCL/PCL 1.12.1/cmake;C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/VTK/lib/cmake/vtk-9.1;C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Boost/lib/cmake/Boost-1.78.0;C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Qhull/lib/cmake/Qhull",
+        "CMAKE_PREFIX_PATH": "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64;C:/ENVIORNMENT/opencv_450_vs2019/x64/vc16/lib;C:/ENVIORNMENT/PCL/PCL 1.12.1;C:/ENVIORNMENT/PCL/PCL 1.12.1/cmake;C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/VTK/lib/cmake/vtk-9.1;C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Boost/lib/cmake/Boost-1.78.0;C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Qhull/lib/cmake/Qhull",
         "OpenCV_DIR": "C:/ENVIORNMENT/opencv_450_vs2019/x64/vc16/lib",
         "PCL_DIR": "C:/ENVIORNMENT/PCL/PCL 1.12.1/cmake",
         "VTK_DIR": "C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/VTK/lib/cmake/vtk-9.1",
-        "Qt6_DIR": "C:/ENVIORNMENT/qt/6.11.1/msvc2022_64/lib/cmake/Qt6",
+        "Qt5_DIR": "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64/lib/cmake/Qt5",
         "HTMSR_EIGEN_INCLUDE_DIR": "C:/ENVIORNMENT/ceresLib/Eigen"
       },
       "architecture": {
@@ -24,7 +24,7 @@
     },
     {
       "name": "vs2022-x64-release",
-      "displayName": "Visual Studio 2022 x64 Release",
+      "displayName": "Visual Studio 2022 x64 Release (Qt 5.15.2)",
       "inherits": "vs2022-x64-debug",
       "binaryDir": "${sourceDir}/out/build/vs2022-x64-release",
       "cacheVariables": {
