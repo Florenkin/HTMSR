@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded PCL/VTK point cloud viewer" ON)
+option(HTMSR_ENABLE_HIK_CAMERA "Build Hikrobot MVS camera acquisition support" OFF)
+set(HIK_MVS_ROOT "C:/ENVIORNMENT/MVS" CACHE PATH "Path to Hikrobot MVS SDK root")
+set(HIK_MVS_RUNTIME_DIR "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64" CACHE PATH "Path to Hikrobot MVS runtime dll directory")
 
 function(htmsr_normalize_compile_definitions output_variable)
     set(normalized_definitions)
@@ -180,18 +183,40 @@ if(MSVC)
     target_compile_options(htmsr_core PRIVATE /utf-8)
 endif()
 
-add_executable(htmsr_app WIN32
+set(HTMSR_APP_SOURCES
     src/app/main.cpp
     src/app/acquisition/AcquisitionTypes.cpp
+    src/app/acquisition/MockAcquisitionProvider.cpp
     src/app/acquisition/OfflineImageSequenceProvider.cpp
+    src/app/acquisition/HikStereoCameraProvider.cpp
+    src/app/services/AcquisitionService.cpp
     src/app/services/AppConfigService.cpp
     src/app/services/QtLogSink.cpp
+    src/app/ui/AcquisitionPanel.cpp
     src/app/ui/ImageViewWidget.cpp
     src/app/ui/LogPanel.cpp
     src/app/ui/MainWindow.cpp
     src/app/ui/ParameterPanel.cpp
     src/app/ui/PointCloudViewWidget.cpp
 )
+
+if(HTMSR_ENABLE_HIK_CAMERA)
+    set(HIK_MVS_INCLUDE_DIR "${HIK_MVS_ROOT}/Development/Includes" CACHE PATH "Path to Hikrobot MVS include directory")
+    set(HIK_MVS_LIBRARY "${HIK_MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib" CACHE FILEPATH "Path to Hikrobot MVS x64 import library")
+
+    if(NOT EXISTS "${HIK_MVS_INCLUDE_DIR}/MvCameraControl.h")
+        message(FATAL_ERROR "Hikrobot MVS header was not found. Set HIK_MVS_INCLUDE_DIR to a directory that contains MvCameraControl.h.")
+    endif()
+    if(NOT EXISTS "${HIK_MVS_LIBRARY}")
+        message(FATAL_ERROR "Hikrobot MVS library was not found. Set HIK_MVS_LIBRARY to MvCameraControl.lib.")
+    endif()
+
+    list(APPEND HTMSR_APP_SOURCES
+        src/app/acquisition/HikCameraDevice.cpp
+    )
+endif()
+
+add_executable(htmsr_app WIN32 ${HTMSR_APP_SOURCES})
 
 target_include_directories(htmsr_app
     PRIVATE
@@ -209,6 +234,21 @@ target_link_libraries(htmsr_app
 
 if(MSVC)
     target_compile_options(htmsr_app PRIVATE /utf-8)
+endif()
+
+if(HTMSR_ENABLE_HIK_CAMERA)
+    target_include_directories(htmsr_app PRIVATE "${HIK_MVS_INCLUDE_DIR}")
+    target_link_libraries(htmsr_app PRIVATE "${HIK_MVS_LIBRARY}")
+    target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_HIK_CAMERA=1)
+
+    if(EXISTS "${HIK_MVS_RUNTIME_DIR}/MvCameraControl.dll")
+        add_custom_command(TARGET htmsr_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HIK_MVS_RUNTIME_DIR}/MvCameraControl.dll"
+                "$<TARGET_FILE_DIR:htmsr_app>/MvCameraControl.dll")
+    endif()
+else()
+    target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_HIK_CAMERA=0)
 endif()
 
 if(HTMSR_ENABLE_VTK_VIEWER)

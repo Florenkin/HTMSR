@@ -177,6 +177,12 @@ void ParameterPanel::setProjectConfig(const AppProjectConfig& config)
     removeEndpointCountSpin_->setValue(config.laserConfig.removeEndPointCount);
 }
 
+void ParameterPanel::setReconstructionDirectories(const std::string& leftDirectory, const std::string& rightDirectory)
+{
+    leftReconstructionEdit_->setText(QString::fromStdString(leftDirectory));
+    rightReconstructionEdit_->setText(QString::fromStdString(rightDirectory));
+}
+
 AppProjectConfig ParameterPanel::projectConfig() const
 {
     // 收集当前界面上的所有项目参数，用于保存和刷新资源树。

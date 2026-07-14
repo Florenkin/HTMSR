@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/services/AcquisitionService.h"
 #include "app/services/AppConfigService.h"
 #include "app/services/QtLogSink.h"
 #include "core/CalibrationService.h"
@@ -14,6 +15,7 @@ class QTreeWidget;
 
 namespace htmsr::app {
 
+class AcquisitionPanel;
 class ImageViewWidget;
 class LogPanel;
 class ParameterPanel;
@@ -24,7 +26,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     /*
-        函数功能：构造主窗口，初始化菜单、工具栏、Dock 区域、中央视图、日志和配置
+        函数功能：构造主窗口，初始化菜单、工具栏、Dock 区域、中央视图、日志、配置和采集入口
         输入：
             parent：Qt 父窗口
         输出：
@@ -46,17 +48,23 @@ private slots:
     void exportPcd();
     // 保存当前项目参数到 QSettings。
     void saveProjectSettings();
+    // 刷新在线采集设备列表。
+    void refreshAcquisitionDevices();
+    // 执行在线采集保存任务。
+    void runAcquisition();
     // 标定后台任务结束后的 UI 回调。
     void onCalibrationFinished();
     // 重建后台任务结束后的 UI 回调。
     void onReconstructionFinished();
+    // 在线采集后台任务结束后的 UI 回调。
+    void onAcquisitionFinished();
 
 private:
     // 构建顶部菜单栏。
     void buildMenus();
     // 构建顶部工具栏。
     void buildToolBar();
-    // 构建左侧资源树、右侧参数面板和底部日志面板。
+    // 构建左侧资源树、右侧参数/采集面板和底部日志面板。
     void buildDocks();
     // 构建中央点云/图像显示标签页。
     void buildCentralView();
@@ -68,12 +76,14 @@ private:
     QString outputPath(const QString& filename) const;
 
     AppConfigService configService_;
+    AcquisitionService acquisitionService_;
     CalibrationService calibrationService_;
     ReconstructionService reconstructionService_;
     PointCloudService pointCloudService_;
     QtLogSink* logSink_ = nullptr;
 
     ParameterPanel* parameterPanel_ = nullptr;
+    AcquisitionPanel* acquisitionPanel_ = nullptr;
     LogPanel* logPanel_ = nullptr;
     PointCloudViewWidget* pointCloudView_ = nullptr;
     ImageViewWidget* leftImageView_ = nullptr;
@@ -84,8 +94,10 @@ private:
 
     CalibrationResult calibration_;
     ReconstructionResult reconstruction_;
+    AcquisitionSessionResult acquisition_;
     QFutureWatcher<CalibrationResult> calibrationWatcher_;
     QFutureWatcher<ReconstructionResult> reconstructionWatcher_;
+    QFutureWatcher<AcquisitionSessionResult> acquisitionWatcher_;
 };
 
 } // namespace htmsr::app

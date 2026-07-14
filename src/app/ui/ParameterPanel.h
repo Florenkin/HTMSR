@@ -29,6 +29,16 @@ public:
     void setProjectConfig(const AppProjectConfig& config);
 
     /*
+        函数功能：将采集会话输出的左右目录写入重建输入目录
+        输入：
+            leftDirectory：左图像保存目录
+            rightDirectory：右图像保存目录
+        输出：
+            无（函数会更新重建目录输入框）
+    */
+    void setReconstructionDirectories(const std::string& leftDirectory, const std::string& rightDirectory);
+
+    /*
         函数功能：从参数面板读取完整项目配置
         输入：
             无
