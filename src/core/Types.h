@@ -46,8 +46,8 @@ struct ImageRange {
 struct CalibrationInput {
     std::string leftDirectory;
     std::string rightDirectory;
-    cv::Size boardSize = cv::Size(11, 8);
-    cv::Size2d squareSize = cv::Size2d(15.0, 15.0);
+    cv::Size boardSize = cv::Size(9, 6);
+    cv::Size2d squareSize = cv::Size2d(25.0, 25.0);
     ImageRange imageRange;
     std::string outputFile = "stereo_calibration.yml";
 };
@@ -79,11 +79,11 @@ struct CalibrationResult {
 // 激光中心线提取参数。
 struct LaserExtractionConfig {
     LaserExtractionMode mode = LaserExtractionMode::GrayCentroid;
-    cv::Rect leftRoi = cv::Rect(0, 0, 3072, 2048);
-    cv::Rect rightRoi = cv::Rect(0, 0, 3072, 2048);
-    int grayThreshold = 150;
-    int minGray = 30;
-    LaserColor laserColor = LaserColor::Blue;
+    cv::Rect leftRoi = cv::Rect(350, 0, 1900, 2048);
+    cv::Rect rightRoi = cv::Rect(900, 0, 1500, 2048);
+    int grayThreshold = 120;
+    int minGray = 20;
+    LaserColor laserColor = LaserColor::Gray;
     double binaryThreshold = 100.0;
     double selectionThreshold = 200.0;
     double stripeWidth = 5.0;
@@ -105,16 +105,33 @@ struct ReconstructionInput {
     ImageRange imageRange;
     CalibrationResult calibration;
     LaserExtractionConfig laserConfig;
-    double matchDistanceThreshold = 0.1;
+    double matchDistanceThreshold = 0.5;
 };
 
 // 单帧左右图像重建结果。
+// 单帧重建诊断信息，用于判断问题发生在提线、匹配还是三维恢复阶段。
+struct FrameReconstructionDiagnostics {
+    int leftLinePointCount = 0;      // 左图提取到的激光中心线点数。
+    int rightLinePointCount = 0;     // 右图提取到的激光中心线点数。
+    double leftLineCoverage = 0.0;   // 左中心线在 ROI 内的覆盖比例，越低越可能是 ROI 或阈值问题。
+    double rightLineCoverage = 0.0;  // 右中心线在 ROI 内的覆盖比例，越低越可能是 ROI 或阈值问题。
+    int matchedPointCount = 0;       // 通过双目几何阈值筛选的匹配点数。
+    double matchRate = 0.0;          // 匹配点数 / 左右较少中心线点数，用于判断匹配阈值是否过严。
+    double meanMatchError = 0.0;     // 通过阈值的匹配误差均值，用于观察匹配质量。
+    double maxMatchError = 0.0;      // 通过阈值的最大匹配误差，用于发现局部异常匹配。
+    bool hasPointBounds = false;     // 是否存在可用三维点包围盒。
+    Eigen::Vector3d minPoint = Eigen::Vector3d::Zero(); // 当前帧三维点最小坐标。
+    Eigen::Vector3d maxPoint = Eigen::Vector3d::Zero(); // 当前帧三维点最大坐标。
+    std::string failureReason = "ok"; // ok/left_empty/right_empty/both_empty/match_empty/points_empty。
+};
+
 struct FrameReconstructionResult {
     std::string leftImagePath;
     std::string rightImagePath;
     std::vector<Eigen::Vector3d> points;
     cv::Mat leftLinePreview;
     cv::Mat rightLinePreview;
+    FrameReconstructionDiagnostics diagnostics;
 };
 
 // 批量重建结果，包含逐帧点云、合并点云以及导出路径。
@@ -135,7 +152,7 @@ struct AppProjectConfig {
     std::string outputDirectory = ".";
     CalibrationInput calibrationInput;
     LaserExtractionConfig laserConfig;
-    double matchDistanceThreshold = 0.1;
+    double matchDistanceThreshold = 0.5;
 };
 
 } // namespace htmsr

@@ -17,6 +17,21 @@ void writeString(QSettings& settings, const char* key, const std::string& value)
     settings.setValue(key, QString::fromStdString(value));
 }
 
+cv::Rect readRoi(
+    QSettings& settings,
+    const char* xKey,
+    const char* yKey,
+    const char* widthKey,
+    const char* heightKey,
+    const cv::Rect& fallback)
+{
+    return cv::Rect(
+        settings.value(xKey, fallback.x).toInt(),
+        settings.value(yKey, fallback.y).toInt(),
+        settings.value(widthKey, fallback.width).toInt(),
+        settings.value(heightKey, fallback.height).toInt());
+}
+
 } // namespace
 
 AppProjectConfig AppConfigService::load() const
@@ -34,11 +49,11 @@ AppProjectConfig AppConfigService::load() const
     config.calibrationInput.rightDirectory = config.rightCalibrationDirectory;
     config.calibrationInput.outputFile = config.calibrationFile;
     config.calibrationInput.boardSize = cv::Size(
-        settings.value("calibration/boardWidth", 11).toInt(),
-        settings.value("calibration/boardHeight", 8).toInt());
+        settings.value("calibration/boardWidth", 9).toInt(),
+        settings.value("calibration/boardHeight", 6).toInt());
     config.calibrationInput.squareSize = cv::Size2d(
-        settings.value("calibration/squareWidth", 15.0).toDouble(),
-        settings.value("calibration/squareHeight", 15.0).toDouble());
+        settings.value("calibration/squareWidth", 25.0).toDouble(),
+        settings.value("calibration/squareHeight", 25.0).toDouble());
     config.calibrationInput.imageRange = {
         settings.value("calibration/imageBegin", -1).toInt(),
         settings.value("calibration/imageEnd", -1).toInt()
@@ -46,25 +61,38 @@ AppProjectConfig AppConfigService::load() const
     config.laserConfig.mode = settings.value("reconstruction/mode", 0).toInt() == 1
         ? LaserExtractionMode::Steger
         : LaserExtractionMode::GrayCentroid;
-    config.laserConfig.laserColor = static_cast<LaserColor>(settings.value("reconstruction/color", static_cast<int>(LaserColor::Blue)).toInt());
-    config.laserConfig.leftRoi = cv::Rect(
-        settings.value("reconstruction/leftRoiX", 0).toInt(),
-        settings.value("reconstruction/leftRoiY", 0).toInt(),
-        settings.value("reconstruction/leftRoiW", 3072).toInt(),
-        settings.value("reconstruction/leftRoiH", 2048).toInt());
-    config.laserConfig.rightRoi = cv::Rect(
-        settings.value("reconstruction/rightRoiX", 0).toInt(),
-        settings.value("reconstruction/rightRoiY", 0).toInt(),
-        settings.value("reconstruction/rightRoiW", 3072).toInt(),
-        settings.value("reconstruction/rightRoiH", 2048).toInt());
-    config.laserConfig.grayThreshold = settings.value("reconstruction/grayThreshold", 150).toInt();
-    config.laserConfig.minGray = settings.value("reconstruction/minGray", 30).toInt();
+    config.laserConfig.laserColor = static_cast<LaserColor>(settings.value("reconstruction/color", static_cast<int>(LaserColor::Gray)).toInt());
+    const LaserExtractionConfig defaultLaserConfig;
+    config.laserConfig.leftRoi = readRoi(
+        settings,
+        "reconstruction/leftRoiX",
+        "reconstruction/leftRoiY",
+        "reconstruction/leftRoiW",
+        "reconstruction/leftRoiH",
+        defaultLaserConfig.leftRoi);
+    config.laserConfig.rightRoi = readRoi(
+        settings,
+        "reconstruction/rightRoiX",
+        "reconstruction/rightRoiY",
+        "reconstruction/rightRoiW",
+        "reconstruction/rightRoiH",
+        defaultLaserConfig.rightRoi);
+    const cv::Rect oldNarrowDefaultRoi(2600, 0, 472, 2048);
+    // 仅迁移旧版本的窄 ROI 默认值，避免用户已经手动调整过的 ROI 被覆盖。
+    if (config.laserConfig.leftRoi == oldNarrowDefaultRoi) {
+        config.laserConfig.leftRoi = defaultLaserConfig.leftRoi;
+    }
+    if (config.laserConfig.rightRoi == oldNarrowDefaultRoi) {
+        config.laserConfig.rightRoi = defaultLaserConfig.rightRoi;
+    }
+    config.laserConfig.grayThreshold = settings.value("reconstruction/grayThreshold", 120).toInt();
+    config.laserConfig.minGray = settings.value("reconstruction/minGray", 20).toInt();
     config.laserConfig.binaryThreshold = settings.value("reconstruction/binaryThreshold", 100.0).toDouble();
     config.laserConfig.selectionThreshold = settings.value("reconstruction/selectionThreshold", 200.0).toDouble();
     config.laserConfig.stripeWidth = settings.value("reconstruction/stripeWidth", 5.0).toDouble();
     config.laserConfig.removeEndPoints = settings.value("reconstruction/removeEndpoints", false).toBool();
     config.laserConfig.removeEndPointCount = settings.value("reconstruction/removeEndpointCount", 10).toInt();
-    config.matchDistanceThreshold = settings.value("reconstruction/matchDistance", 0.1).toDouble();
+    config.matchDistanceThreshold = settings.value("reconstruction/matchDistance", 0.5).toDouble();
     return config;
 }
 

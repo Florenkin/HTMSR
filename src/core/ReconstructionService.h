@@ -38,7 +38,8 @@ private:
         const LaserExtractionConfig& laserConfig,
         double matchDistanceThreshold,
         cv::Mat& leftPreview,
-        cv::Mat& rightPreview) const;
+        cv::Mat& rightPreview,
+        FrameReconstructionDiagnostics& diagnostics) const;
 
     /*
         函数功能：将像素坐标根据相机内参转换为归一化相机射线

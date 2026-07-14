@@ -12,10 +12,94 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <numeric>
+#include <sstream>
 #include <stdexcept>
 
 namespace htmsr {
+namespace {
+
+double computeLineCoverage(const std::vector<Eigen::Vector2d>& points, const cv::Rect& roi)
+{
+    if (points.empty() || roi.width <= 0 || roi.height <= 0) {
+        return 0.0;
+    }
+
+    double minX = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    double minY = std::numeric_limits<double>::max();
+    double maxY = std::numeric_limits<double>::lowest();
+    for (const auto& point : points) {
+        minX = std::min(minX, point.x());
+        maxX = std::max(maxX, point.x());
+        minY = std::min(minY, point.y());
+        maxY = std::max(maxY, point.y());
+    }
+
+    // 暂时不依赖横向/纵向提线参数，取 x/y 两个方向中覆盖更大的比例。
+    const double xCoverage = (maxX - minX + 1.0) / static_cast<double>(roi.width);
+    const double yCoverage = (maxY - minY + 1.0) / static_cast<double>(roi.height);
+    return std::clamp(std::max(xCoverage, yCoverage), 0.0, 1.0);
+}
+
+void computePointBounds(const std::vector<Eigen::Vector3d>& points, FrameReconstructionDiagnostics& diagnostics)
+{
+    if (points.empty()) {
+        diagnostics.hasPointBounds = false;
+        return;
+    }
+
+    diagnostics.hasPointBounds = true;
+    diagnostics.minPoint = points.front();
+    diagnostics.maxPoint = points.front();
+    for (const auto& point : points) {
+        diagnostics.minPoint = diagnostics.minPoint.cwiseMin(point);
+        diagnostics.maxPoint = diagnostics.maxPoint.cwiseMax(point);
+    }
+}
+
+std::string formatDouble(double value, int precision = 3)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(precision) << value;
+    return stream.str();
+}
+
+std::string formatPoint(const Eigen::Vector3d& point)
+{
+    return formatDouble(point.x()) + "," + formatDouble(point.y()) + "," + formatDouble(point.z());
+}
+
+std::string formatBounds(const FrameReconstructionDiagnostics& diagnostics)
+{
+    if (!diagnostics.hasPointBounds) {
+        return "none";
+    }
+    return "[" + formatPoint(diagnostics.minPoint) + "]-[" + formatPoint(diagnostics.maxPoint) + "]";
+}
+
+std::string formatFrameDiagnostics(int frameIndex, const FrameReconstructionResult& frame)
+{
+    const auto& diagnostics = frame.diagnostics;
+    std::ostringstream stream;
+    stream << "Frame " << frameIndex
+           << ": leftLine=" << diagnostics.leftLinePointCount
+           << " leftCov=" << formatDouble(diagnostics.leftLineCoverage, 2)
+           << " rightLine=" << diagnostics.rightLinePointCount
+           << " rightCov=" << formatDouble(diagnostics.rightLineCoverage, 2)
+           << " matched=" << diagnostics.matchedPointCount
+           << " matchRate=" << formatDouble(diagnostics.matchRate, 2)
+           << " matchErrMean=" << formatDouble(diagnostics.meanMatchError, 3)
+           << " matchErrMax=" << formatDouble(diagnostics.maxMatchError, 3)
+           << " points=" << frame.points.size()
+           << " bounds=" << formatBounds(diagnostics)
+           << " reason=" << diagnostics.failureReason;
+    return stream.str();
+}
+
+} // namespace
 
 ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInput& input) const
 {
@@ -58,10 +142,10 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
             input.laserConfig,
             input.matchDistanceThreshold,
             frame.leftLinePreview,
-            frame.rightLinePreview);
+            frame.rightLinePreview,
+            frame.diagnostics);
 
-        Logger::instance().info("Reconstruction",
-            "Frame " + std::to_string(i + 1) + " reconstructed points=" + std::to_string(frame.points.size()));
+        Logger::instance().info("Reconstruction", formatFrameDiagnostics(i + 1, frame));
         result.frames.push_back(std::move(frame));
     }
 
@@ -79,8 +163,11 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
     const LaserExtractionConfig& laserConfig,
     double matchDistanceThreshold,
     cv::Mat& leftPreview,
-    cv::Mat& rightPreview) const
+    cv::Mat& rightPreview,
+    FrameReconstructionDiagnostics& diagnostics) const
 {
+    diagnostics = FrameReconstructionDiagnostics{};
+
     // 第一步：分别提取左右图像中的激光中心线。
     LaserExtractionService extractor;
     const auto leftLine = extractor.extract(leftImage, laserConfig.leftRoi, laserConfig);
@@ -88,8 +175,23 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
     leftPreview = leftLine.preview;
     rightPreview = rightLine.preview;
 
+    const cv::Rect leftSafeRoi = laserConfig.leftRoi & cv::Rect(0, 0, leftImage.cols, leftImage.rows);
+    const cv::Rect rightSafeRoi = laserConfig.rightRoi & cv::Rect(0, 0, rightImage.cols, rightImage.rows);
+    // 提线统计先于匹配记录，便于区分是 ROI/阈值问题还是后续几何匹配问题。
+    diagnostics.leftLinePointCount = static_cast<int>(leftLine.points.size());
+    diagnostics.rightLinePointCount = static_cast<int>(rightLine.points.size());
+    diagnostics.leftLineCoverage = computeLineCoverage(leftLine.points, leftSafeRoi);
+    diagnostics.rightLineCoverage = computeLineCoverage(rightLine.points, rightSafeRoi);
+
     if (leftLine.points.empty() || rightLine.points.empty()) {
-        Logger::instance().warning("Reconstruction", "Laser line extraction returned empty points.");
+        // 分开记录左右空线，后续看日志就能判断是单侧曝光/ROI 问题还是双侧都没有提到线。
+        if (leftLine.points.empty() && rightLine.points.empty()) {
+            diagnostics.failureReason = "both_empty";
+        } else if (leftLine.points.empty()) {
+            diagnostics.failureReason = "left_empty";
+        } else {
+            diagnostics.failureReason = "right_empty";
+        }
         return {};
     }
 
@@ -134,6 +236,7 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
 
     std::vector<Eigen::Vector2d> matchedLeft;
     std::vector<Eigen::Vector2d> matchedRight;
+    std::vector<double> matchErrors;
 
     // 第三步：在左右中心线上寻找满足双目几何约束的匹配点。
     if (undistortedLeft.size() <= undistortedRight.size()) {
@@ -157,6 +260,7 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
             if (bestError < matchDistanceThreshold) {
                 matchedLeft.emplace_back(leftPoint.x, leftPoint.y);
                 matchedRight.emplace_back(undistortedRight[bestIndex].x, undistortedRight[bestIndex].y);
+                matchErrors.push_back(bestError);
             }
         }
     } else {
@@ -179,8 +283,25 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
             if (bestError < matchDistanceThreshold) {
                 matchedLeft.emplace_back(undistortedLeft[bestIndex].x, undistortedLeft[bestIndex].y);
                 matchedRight.emplace_back(rightPoint.x, rightPoint.y);
+                matchErrors.push_back(bestError);
             }
         }
+    }
+
+    diagnostics.matchedPointCount = static_cast<int>(matchedLeft.size());
+    const size_t matchDenominator = std::min(undistortedLeft.size(), undistortedRight.size());
+    diagnostics.matchRate = matchDenominator == 0
+        ? 0.0
+        : static_cast<double>(diagnostics.matchedPointCount) / static_cast<double>(matchDenominator);
+    if (!matchErrors.empty()) {
+        // 匹配误差能直接反映阈值是否过严或过松，是后续调参的主要依据。
+        diagnostics.meanMatchError = std::accumulate(matchErrors.begin(), matchErrors.end(), 0.0) / static_cast<double>(matchErrors.size());
+        diagnostics.maxMatchError = *std::max_element(matchErrors.begin(), matchErrors.end());
+    }
+
+    if (matchedLeft.empty()) {
+        diagnostics.failureReason = "match_empty";
+        return {};
     }
 
     // 第四步：对每一组匹配点构造空间射线，并恢复三维点。
@@ -197,6 +318,14 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
         reconstructed.push_back(pointInLeft);
     }
 
+    if (reconstructed.empty()) {
+        diagnostics.failureReason = "points_empty";
+        return reconstructed;
+    }
+
+    // 点云包围盒用于快速发现深度发散、尺度异常或局部飞点。
+    computePointBounds(reconstructed, diagnostics);
+    diagnostics.failureReason = "ok";
     return reconstructed;
 }
 
