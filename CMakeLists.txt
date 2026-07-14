@@ -133,14 +133,14 @@ endif()
 # 会被粘成 BOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB，导致 VS IntelliSense 报 E0992。
 # 这里在进入 PCL 配置前清空兼容变量，保留后续 target 级宏定义作为唯一来源。
 unset(BOOST_DEFINITIONS)
-find_package(PCL REQUIRED COMPONENTS common io visualization)
+find_package(PCL REQUIRED COMPONENTS common io)
 htmsr_normalize_compile_definitions(HTMSR_PCL_DEFINITIONS ${PCL_DEFINITIONS})
 set(PCL_DEFINITIONS "${HTMSR_PCL_DEFINITIONS}")
 htmsr_sanitize_imported_compile_definitions(${PCL_LIBRARIES})
 
-set(HTMSR_PCL_LINK_LIBRARIES)
+set(HTMSR_PCL_CORE_LINK_LIBRARIES)
 foreach(pcl_library IN LISTS PCL_LIBRARIES)
-    list(APPEND HTMSR_PCL_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
+    list(APPEND HTMSR_PCL_CORE_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
 endforeach()
 find_package(Qt5 REQUIRED COMPONENTS Widgets Concurrent OpenGL)
 
@@ -170,7 +170,7 @@ target_link_libraries(htmsr_core
         Eigen3::Eigen
         ${OpenCV_LIBS}
     PRIVATE
-        ${HTMSR_PCL_LINK_LIBRARIES}
+        ${HTMSR_PCL_CORE_LINK_LIBRARIES}
 )
 
 target_compile_definitions(htmsr_core
@@ -259,6 +259,7 @@ else()
 endif()
 
 if(HTMSR_ENABLE_VTK_VIEWER)
+    find_package(PCL QUIET COMPONENTS visualization)
     find_package(VTK QUIET COMPONENTS
         GUISupportQt
         RenderingCore
@@ -266,15 +267,24 @@ if(HTMSR_ENABLE_VTK_VIEWER)
         InteractionStyle
     )
 
-    if(VTK_FOUND)
-        target_link_libraries(htmsr_app PRIVATE ${HTMSR_PCL_LINK_LIBRARIES} ${VTK_LIBRARIES})
+    if(PCL_VISUALIZATION_FOUND AND VTK_FOUND)
+        htmsr_normalize_compile_definitions(HTMSR_PCL_VISUALIZATION_DEFINITIONS ${PCL_DEFINITIONS})
+        set(PCL_DEFINITIONS "${HTMSR_PCL_VISUALIZATION_DEFINITIONS}")
+        htmsr_sanitize_imported_compile_definitions(${PCL_LIBRARIES})
+
+        set(HTMSR_PCL_VIEWER_LINK_LIBRARIES)
+        foreach(pcl_library IN LISTS PCL_LIBRARIES)
+            list(APPEND HTMSR_PCL_VIEWER_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
+        endforeach()
+
+        target_link_libraries(htmsr_app PRIVATE ${HTMSR_PCL_VIEWER_LINK_LIBRARIES} ${VTK_LIBRARIES})
         target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=1)
         vtk_module_autoinit(
             TARGETS htmsr_app
             MODULES ${VTK_LIBRARIES}
         )
     else()
-        message(WARNING "VTK Qt components were not found. Building with a placeholder point cloud view.")
+        message(WARNING "PCL visualization or VTK Qt components were not found. Building with a placeholder point cloud view.")
         target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=0)
     endif()
 else()
