@@ -242,10 +242,17 @@ if(HTMSR_ENABLE_HIK_CAMERA)
     target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_HIK_CAMERA=1)
 
     if(EXISTS "${HIK_MVS_RUNTIME_DIR}/MvCameraControl.dll")
-        add_custom_command(TARGET htmsr_app POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HIK_MVS_RUNTIME_DIR}/MvCameraControl.dll"
-                "$<TARGET_FILE_DIR:htmsr_app>/MvCameraControl.dll")
+        file(GLOB HTMSR_HIK_RUNTIME_FILES
+            "${HIK_MVS_RUNTIME_DIR}/*.dll"
+            "${HIK_MVS_RUNTIME_DIR}/*.cti"
+            "${HIK_MVS_RUNTIME_DIR}/*.ini"
+            "${HIK_MVS_RUNTIME_DIR}/*.manifest")
+        foreach(hik_runtime_file IN LISTS HTMSR_HIK_RUNTIME_FILES)
+            add_custom_command(TARGET htmsr_app POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${hik_runtime_file}"
+                    "$<TARGET_FILE_DIR:htmsr_app>")
+        endforeach()
     endif()
 else()
     target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_HIK_CAMERA=0)
