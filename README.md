@@ -1,378 +1,447 @@
 # HTMSR
 
-HTMSR 是一个基于 `Qt 5.15.2 + Visual Studio + CMake + OpenCV + Eigen + PCL` 的双目标定与离线激光三维重建桌面项目。当前版本定位为离线处理工具，核心能力包括：
+HTMSR 是一个基于 `Qt 5.15.2 + Visual Studio 2022 + CMake + OpenCV + Eigen + PCL` 的双目线激光三维重建桌面软件。项目当前已经覆盖离线双目标定、离线激光三维重建、点云导出、海康相机在线采集预留与振镜串口联动流程。
 
-- 双目标定
-- 激光中心线提取
-- 左右图像三维重建
-- 点云显示与导出
-- 参数持久化与日志管理
+当前软件的核心目标是：先保证双目线激光扫描仪的软件框架、标定链路、重建链路和在线采集链路可以串起来，再逐步用真实硬件数据优化标定精度、中心线提取、匹配策略和点云质量。
 
-本 README 用于统一说明项目的结构、运行方式、核心流程和后续开发约束，便于继续演进本项目。
+## 当前能力
 
-## 1. 项目定位
+- 离线双目标定：读取左右棋盘格图像，计算 `K1/D1/K2/D2/R/t/E/F`，保存 `stereo_calibration.yml`。
+- 离线重建：读取左右线激光图像，提取激光中心线，按双目几何恢复三维点云。
+- 激光中心线提取：支持灰度重心法和 Steger 方法。
+- 点云输出：支持 TXT / PCD 导出。
+- 点云显示：Debug 环境可使用 VTK Qt 三维视图；Release 在当前 VTK 环境不完整时自动退回占位视图。
+- 在线采集：支持海康 MVS 相机枚举、连接、曝光/增益/触发参数配置、左右图像采集保存。
+- 振镜联动：支持按 `振镜通信协议.docx` 通过 Windows 串口 COM 下发振镜、电机、激光和采集节拍相关参数。
+- 一键流程：提供“一键自动标定”和“一键扫描重建”入口，复用现有标定与重建核心服务。
 
-项目当前的设计目标是：
-
-- 将 `references` 中的旧业务逻辑迁移为可维护的 C++/Qt 工程
-- 保持核心算法层与 Qt UI 解耦
-- 先完成离线重建，再为在线采集预留扩展点
-
-当前工程遵循以下原则：
-
-- `references` 目录只作为参考，不参与编译，不修改其中代码
-- `src/core` 保持纯 C++ 核心，不依赖 Qt UI
-- `src/app` 负责界面、配置、日志桥接和采集预留
-- 后续在线采集通过接口扩展，不破坏现有离线重建核心
-
-## 2. 顶层目录
+## 目录结构
 
 ```text
 C:\PROJECT\HTMSR
-├── CMakeLists.txt
-├── CMakePresets.json
-├── docs
-├── out
-├── references
-├── scripts
-└── src
-    ├── app
-    │   ├── acquisition
-    │   ├── services
-    │   ├── ui
-    │   └── main.cpp
-    └── core
+|-- CMakeLists.txt
+|-- CMakePresets.json
+|-- README.md
+|-- docs
+|-- references
+|-- scripts
+|-- src
+|   |-- core
+|   |-- app
+|       |-- acquisition
+|       |-- services
+|       |-- ui
+|-- test
+|-- out
 ```
 
-各目录职责如下：
+主要目录职责：
 
-- `src/core`
-  纯业务核心，包括标定、激光中心线提取、重建、点云导出、日志和文件工具。
-- `src/app/ui`
-  Qt Widgets 界面层，包括主窗口、参数面板、日志面板、图像显示和点云显示控件。
-- `src/app/services`
-  Qt 应用服务层，包括 `QSettings` 配置持久化和日志桥接。
-- `src/app/acquisition`
-  采集预留层，定义相机设备和帧来源接口，当前只提供离线图片序列 Provider。
-- `references`
-  原始参考实现与 OpenCorr 资料，不参与编译。
-- `docs`
-  项目分析文档、脑图和开发说明。
-- `scripts`
-  辅助脚本。
-- `out`
-  构建输出目录。
+| 目录 | 作用 |
+|---|---|
+| `src/core` | 纯业务核心层，包含标定、中心线提取、三维重建、点云导出、日志和文件工具。 |
+| `src/app/acquisition` | 采集与设备抽象层，包含海康相机、模拟采集、离线序列、振镜串口控制。 |
+| `src/app/services` | 应用服务层，负责配置持久化、日志桥接、在线采集、自动标定、扫描重建工作流。 |
+| `src/app/ui` | Qt Widgets 界面层，包含主窗口、参数面板、在线采集面板、图像视图、点云视图和日志表。 |
+| `docs` | 开发环境、准备流程、编码规范等项目文档。 |
+| `references` | 旧实现和 OpenCorr 参考资料，只作分析参考，不参与编译。 |
+| `test` | 测试素材、参考点云和实际输出目录。 |
+| `out` | CMake 构建、打包和运行输出目录。 |
 
-## 3. 构建方式
+## 环境依赖
 
-项目采用 `CMake` 构建，推荐直接在 Visual Studio 2022 中打开项目目录。
+当前项目默认 Windows x64 + MSVC x64。推荐另一台电脑尽量保持同样目录结构，这样可以少改 CMake 配置。
 
-可用预设：
+| 依赖 | 推荐版本/路径 | 是否必需 | 用途 |
+|---|---|---:|---|
+| Visual Studio 2022 | Community 或更高版本 | 是 | MSVC x64 编译、CMake 集成、调试。 |
+| CMake | VS 自带即可，3.24+ | 是 | 工程配置和生成。 |
+| Ninja | VS 自带即可 | 是 | CMake 构建后端。 |
+| Qt | `C:\ENVIORNMENT\qt\5.15.2\msvc2019_64` | 是 | Qt Widgets 桌面界面。 |
+| OpenCV | `C:\ENVIORNMENT\opencv_450_vs2019` | 是 | 图像读取、标定、畸变处理、图像预处理。 |
+| Eigen | `C:\ENVIORNMENT\ceresLib\Eigen` | 是 | 矩阵、向量、三维几何计算。 |
+| PCL | `C:\ENVIORNMENT\PCL\PCL 1.12.1` | 是 | 点云结构、PCD 保存。 |
+| Boost / Qhull / FLANN | PCL 第三方目录内 | 间接必需 | PCL 依赖。 |
+| VTK Qt | PCL 自带或单独安装 | 可选 | 内嵌三维点云视图。 |
+| Hikrobot MVS SDK | `C:\ENVIORNMENT\MVS` | 接真实相机时必需 | 海康相机枚举、连接、取流和参数配置。 |
+| MVS Runtime | `C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64` | 接真实相机时必需 | 海康运行时 DLL、GenICam DLL、CTI 文件。 |
+| 串口驱动 | 由振镜控制器/USB 转串口决定 | 接振镜时必需 | 提供 `COMx` 串口。 |
 
-- `vs2022-x64-debug`
-- `vs2022-x64-release`
+注意：项目里当前路径拼写是 `C:\ENVIORNMENT`，不是常见的 `C:\ENVIRONMENT`。如果另一台电脑路径不同，优先通过 `CMakeUserPresets.json` 或配置脚本改本机路径，不建议直接改公共 `CMakePresets.json`。
 
-主要第三方依赖：
+## 本机环境配置
 
-- `Qt5 Widgets / Concurrent`
-- `OpenCV`
-- `Eigen3`
-- `PCL`
-- `VTK` Qt 组件
+项目提供了环境路径配置脚本，用来在不同电脑上生成本机专用 `CMakeUserPresets.json`。
 
-说明：
+首次使用可以执行：
 
-- 如果未找到 VTK Qt 组件，程序仍可构建，但点云视图会退化为占位显示。
-- `CMakePresets.json` 中已经给出了当前机器的典型依赖路径写法，可按本机环境调整。
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Configure-HtmsrEnvironment.ps1 -CreateDefault
+```
 
-## 4. 工程分层
-
-### 4.1 `htmsr_core`
-
-核心静态库，主要由以下模块组成：
-
-- `Types.h`
-  定义核心数据契约，包括：
-  - `CalibrationInput`
-  - `CalibrationResult`
-  - `LaserExtractionConfig`
-  - `ReconstructionInput`
-  - `FrameReconstructionResult`
-  - `ReconstructionResult`
-  - `AppProjectConfig`
-- `CalibrationService`
-  双目标定、YAML 标定文件读写。
-- `LaserExtractionService`
-  激光中心线提取，支持灰度重心法和 Steger 法。
-- `ReconstructionService`
-  离线批量重建核心。
-- `PointCloudService`
-  点云合并、TXT/PCD 导出。
-- `FileSystemUtils`
-  图像扫描、排序、范围裁剪、目录创建。
-- `Logger`
-  统一日志入口。
-
-### 4.2 `htmsr_app`
-
-Qt 桌面程序，包含：
-
-- `MainWindow`
-  组织菜单、工具栏、Dock 区、任务入口和结果显示。
-- `ParameterPanel`
-  收集项目路径、标定参数、重建参数和采集占位参数。
-- `LogPanel`
-  显示日志表。
-- `ImageViewWidget`
-  显示左图、右图、调试图。
-- `PointCloudViewWidget`
-  显示点云或占位信息。
-
-### 4.3 `app/services`
-
-- `AppConfigService`
-  使用 `QSettings` 做参数持久化。
-- `QtLogSink`
-  将核心层 `Logger` 输出桥接到 Qt signal。
-
-### 4.4 `app/acquisition`
-
-- `ICameraDevice`
-  在线相机设备接口。
-- `IAcquisitionProvider`
-  帧来源接口。
-- `FramePair`
-  左右帧数据对象。
-- `OfflineImageSequenceProvider`
-  离线图片序列实现。
-
-当前该层已预留，但离线重建还没有真正通过 `IAcquisitionProvider` 统一接入。
-
-## 5. 核心业务流程
-
-### 5.1 程序启动
+然后按本机实际路径修改：
 
 ```text
-main.cpp
-  -> QApplication
-  -> qRegisterMetaType<LogMessage>
-  -> MainWindow
-  -> buildCentralView / buildDocks / buildMenus / buildToolBar
-  -> AppConfigService::load
-  -> Logger::info("HTMSR started")
+scripts/htmsr_environment.local.json
 ```
 
-### 5.2 双目标定流程
+修改后重新生成 CMake 本机 preset：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Configure-HtmsrEnvironment.ps1
+```
+
+如果要跳过海康相机编译，可以把本机配置里的 `enableHikCamera` 改为 `false`。这样仍可测试离线标定、离线重建和点云导出。
+
+## 构建方式
+
+推荐直接用 Visual Studio 2022 打开项目文件夹：
 
 ```text
-用户点击“标定”
-  -> MainWindow::runCalibration
-  -> ParameterPanel::calibrationInput
-  -> QtConcurrent::run
-  -> CalibrationService::calibrate
-  -> listImageFiles
-  -> calibrateSingleCamera 左相机
-  -> calibrateSingleCamera 右相机
-  -> findChessboardCornersSB
-  -> cornerSubPix
-  -> cv::stereoCalibrate
-  -> saveCalibration
-  -> MainWindow::onCalibrationFinished
+C:\PROJECT\HTMSR
 ```
 
-### 5.3 离线重建流程
+也可以在命令行构建。
+
+Debug：
+
+```powershell
+cmake --preset vs2022-x64-debug
+cmake --build --preset debug
+```
+
+Release：
+
+```powershell
+cmake --preset vs2022-x64-release
+cmake --build --preset release
+```
+
+如果使用本机专用 preset：
+
+```powershell
+cmake --preset local-vs2022-x64-debug
+cmake --build --preset local-debug
+
+cmake --preset local-vs2022-x64-release
+cmake --build --preset local-release
+```
+
+普通 PowerShell 如果找不到 MSVC 编译环境，建议使用 Visual Studio Developer PowerShell，或先执行：
+
+```powershell
+cmd /d /c "call ""C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"" -arch=x64 && cmake --preset vs2022-x64-release && cmake --build --preset release"
+```
+
+## 运行方式
+
+构建后可运行：
 
 ```text
-用户点击“重建”
-  -> MainWindow::runReconstruction
-  -> 检查或加载 CalibrationResult
-  -> ParameterPanel::reconstructionInput
-  -> QtConcurrent::run
-  -> ReconstructionService::reconstruct
-  -> listImageFiles 左右重建图
-  -> 逐帧 reconstructFrame
-  -> LaserExtractionService::extract
-  -> cv::undistortPoints
-  -> pixelToRay
-  -> 左右射线匹配
-  -> closestPointBetweenLines
-  -> PointCloudService::mergeFrames
-  -> MainWindow::onReconstructionFinished
-  -> PointCloudViewWidget::setPoints
-  -> ImageViewWidget::setImage
+C:\PROJECT\HTMSR\out\build\vs2022-x64-debug\htmsr_app.exe
+C:\PROJECT\HTMSR\out\build\vs2022-x64-release\htmsr_app.exe
 ```
 
-## 6. 激光中心线提取逻辑
+当前构建会在 exe 同目录复制 Qt、MVS 等运行时文件，并生成 `qt.conf`，用于避免 Qt 插件路径污染。
 
-`LaserExtractionService` 是当前重建链路中的关键模块。
+如果只把软件发到另一台电脑上运行，不要只复制 `htmsr_app.exe`。需要复制完整发布目录或完整构建输出目录，至少包含：
 
-### 6.1 公共入口
+- `htmsr_app.exe`
+- Qt DLL
+- `platforms/qwindows.dll`
+- OpenCV / PCL / MVS 相关 DLL
+- `qt.conf`
 
-- 检查空图
-- 将用户输入 ROI 裁剪到图像有效范围
-- 根据模式选择：
-  - `GrayCentroid`
-  - `Steger`
+## UI 使用入口
 
-### 6.2 灰度重心法
+主界面主要分为几个区域：
 
-主要步骤：
+| 区域 | 功能 |
+|---|---|
+| 左侧资源树 | 显示标定数据、重建数据、采集结果和点云数量。 |
+| 中央视图 | 显示点云、左图、右图和调试图。 |
+| 右侧参数监控 | 配置项目路径、标定参数、重建参数。 |
+| 右侧在线采集 | 配置海康相机、振镜串口参数，并执行采集/自动标定/扫描重建。 |
+| 底部消息 | 显示 App、Calibration、Reconstruction、HikCamera、Galvo、IntegratedWorkflow 等日志。 |
 
-- 按颜色通道取灰度
-- 阈值分割
-- 形态学开运算去噪
-- 连通区域筛选
-- 在每一行内按灰度加权求中心
-- 生成中心线调试预览图
+需要控制相机时，请切换到右侧底部的 `在线采集` 标签，而不是 `参数监控 -> 采集` 页。
 
-### 6.3 Steger 法
+## 离线标定流程
 
-主要步骤：
-
-- 提取候选亮区域
-- 依据条纹宽度构造高斯导数核
-- 计算一阶/二阶导数
-- 用 Hessian 信息计算亚像素中心
-- 生成中心线调试预览图
-
-## 7. 当前输入输出约定
-
-### 7.1 标定输入
+输入素材：
 
 - 左标定图像目录
 - 右标定图像目录
-- 棋盘格内角点数 `boardSize`
-- 方格物理尺寸 `squareSize`
-- 图像索引范围 `ImageRange`
+- 棋盘格内角点数量
+- 方格实际尺寸
 - 输出标定文件路径
 
-### 7.2 重建输入
+代码链路：
+
+```text
+MainWindow::runCalibration
+-> ParameterPanel::calibrationInput
+-> CalibrationService::calibrate
+-> listImageFiles
+-> readImages
+-> calibrateSingleCamera
+-> cv::findChessboardCornersSB
+-> cv::cornerSubPix
+-> cv::stereoCalibrate
+-> saveCalibration
+-> MainWindow::onCalibrationFinished
+```
+
+输出：
+
+```text
+stereo_calibration.yml
+```
+
+说明：真实重建必须使用项目左右相机在相同分辨率、相同镜头状态下拍摄的棋盘格图像。网上或 OpenCV 官方样例图只能验证流程，不能用于真实精度评估。
+
+## 离线重建流程
+
+输入素材：
 
 - 左重建图像目录
 - 右重建图像目录
-- 图像索引范围
-- 标定结果文件
-- ROI、阈值、颜色通道、算法模式等重建参数
+- 有效双目标定文件
+- ROI、灰度阈值、最小灰度、线宽、匹配距离等重建参数
 
-### 7.3 输出
-
-- `stereo_calibration.yml`
-- 批量重建结果点云
-- `txt` 点云
-- `pcd` 点云
-- 左右中心线预览图
-
-## 8. 当前功能边界
-
-当前已实现：
-
-- Qt Widgets 主界面
-- 双目标定
-- OpenCV YAML 标定文件读写
-- 灰度重心法中心线提取
-- Steger 法中心线提取
-- 左右图像离线批量重建
-- 点云合并
-- TXT / PCD 导出
-- 参数持久化
-- 日志展示
-- 在线采集接口预留
-
-当前限制：
-
-- 点云内嵌三维显示依赖 VTK Qt 组件，缺失时只显示占位视图
-- 重建流程当前仍直接扫描目录，不是通过 `IAcquisitionProvider`
-- 未实现已有点云文件导入查看
-- 异步任务目前只有完成回调，没有逐帧进度回调
-- 左右点匹配目前是基于射线误差的近似匹配，仍需真实数据持续调参
-
-## 9. 与 `references` 的关系
-
-`references` 目录中包含两类资料：
-
-- `references/src`
-  旧版激光三维重建实现，是当前项目算法迁移的直接参考。
-- `references/OpenCorr-GUI_3.0`
-  OpenCorr 资料，主要可借鉴其架构分层、双目匹配分层和 ROI/POI 组织思路。
-
-当前项目与 OpenCorr 的关系是：
-
-- 可以借鉴其“分层”和“流程设计”
-- 不直接照搬其面向 DIC 的相关匹配算法
-
-## 10. 后续开发建议
-
-### 10.1 在线采集接入
-
-建议下一步扩展：
-
-- 新增具体相机 SDK 适配类，如 `CameraDeviceBasler`
-- 实现 `OnlineStereoAcquisitionProvider`
-- 将 `ReconstructionService` 改造成支持统一帧源接口
-
-目标结构：
+代码链路：
 
 ```text
-ReconstructionService
-  -> IFrameSource / IAcquisitionProvider
-  -> 离线图片
-  -> 在线相机
+MainWindow::runReconstruction
+-> ParameterPanel::reconstructionInput
+-> ReconstructionService::reconstruct
+-> listImageFiles
+-> reconstructFrame
+-> LaserExtractionService::extract
+-> cv::undistortPoints
+-> pixelToRay
+-> 左右中心线匹配
+-> closestPointBetweenLines
+-> PointCloudService::mergeFrames
+-> PointCloudViewWidget::setPoints
 ```
 
-### 10.2 点云导入
+输出：
 
-建议新增 `PointCloudImportService`，支持：
+- 批量三维点云
+- 左右中心线调试图
+- `point_cloud.txt`
+- `point_cloud.pcd`
 
-- `txt`
-- `pcd`
-- `ply`
-- `asc`
+每帧重建日志会输出诊断信息，包括左右中心线点数、覆盖率、匹配数、匹配率、误差、点云范围和失败原因。
 
-便于直接查看已有历史点云或测试素材。
+## 在线采集与振镜联动
 
-### 10.3 测试与回归
+在线采集面板分为两层控制。
 
-建议逐步增加：
+**相机采集**
 
-- 标定服务测试
-- 图像配对测试
-- ROI 越界测试
-- 空图像测试
-- 无中心线测试
-- 点云导出测试
-- 固定样例回归测试
+这一部分直接控制海康相机，走 MVS SDK：
 
-### 10.4 工程维护规范
+- 左相机 / 右相机
+- 使用模拟采集
+- 采集帧数
+- 保存目录
+- 曝光 `us`
+- 增益
+- 硬触发
+- 触发线
+- 超时 `ms`
 
-建议保持：
+对应代码：
 
-- `core` 不直接 include Qt UI
-- UI 只负责参数收集和结果展示，不承载复杂算法
-- 所有长任务继续放后台线程执行
-- 所有异常统一转为日志和用户可读提示
-- 新增算法优先通过数据结构显式传参，避免全局变量
+```text
+src/app/acquisition/HikCameraDevice.*
+src/app/acquisition/HikStereoCameraProvider.*
+```
 
-## 11. 推荐阅读顺序
+当前相机参数不是输入框变化时立即下发，而是在点击 `采集保存`、`一键自动标定` 或 `一键扫描重建` 后，连接并配置相机时下发。
 
-如果后续开发者需要快速熟悉工程，建议按以下顺序阅读：
+**振镜控制**
 
-1. `src/core/Types.h`
-2. `src/core/CalibrationService.*`
-3. `src/core/LaserExtractionService.*`
-4. `src/core/ReconstructionService.*`
-5. `src/core/PointCloudService.*`
-6. `src/app/ui/MainWindow.*`
-7. `src/app/ui/ParameterPanel.*`
-8. `src/app/services/AppConfigService.*`
-9. `docs/HTMSR_项目分析与离线重建流程.md`
-10. `docs/双目激光三维重建.xmind`
+这一部分按 `振镜通信协议.docx` 通过串口控制振镜控制器，不直接控制海康相机本体：
 
-## 12. 文档来源
+- 串口号
+- 波特率
+- 命令超时
+- 同步模式
+- 扫描方向
+- 抓图间隔
+- 连续模式等待
+- 步进角度
+- 自动旋转角度
+- 正向速度
+- 反向速度
+- 激光占空比
+- 电压范围
 
-本 README 由以下文档整理合并而成：
+对应代码：
 
-- [plan.md](/C:/PROJECT/HTMSR/docs/plan.md)
-- [HTMSR_项目结构功能说明书.md](/C:/PROJECT/HTMSR/docs/HTMSR_项目结构功能说明书.md)
-- [HTMSR_项目分析与离线重建流程.md](/C:/PROJECT/HTMSR/docs/HTMSR_项目分析与离线重建流程.md)
+```text
+src/app/acquisition/GalvoController.*
+```
 
-后续如项目结构、流程或输入输出约定发生变化，应优先同步更新本 README，再决定是否拆分回专题文档。
+一键扫描重建的大致执行顺序：
+
+```text
+打开串口并连接振镜控制器
+-> 下发振镜参数
+-> 枚举并连接左右海康相机
+-> 配置曝光、增益、触发模式
+-> 开始取流
+-> 振镜打开激光并触发连续采集
+-> 抓取左右图像并保存 left/right
+-> 加载已有 stereo_calibration.yml
+-> 自动执行重建
+-> 刷新资源树、图像预览和点云结果
+```
+
+自动标定流程会在线采集左右棋盘格图像，然后调用现有 `CalibrationService`。扫描图像和棋盘格标定图像不是同一种素材，不建议混在同一次任务中完成。
+
+## 真实硬件联调顺序
+
+建议按下面顺序测试，别一上来就点一键全流程。这样出问题时更容易定位。
+
+1. 在海康 MVS 客户端确认左右相机都能预览。
+2. 关闭 MVS 客户端，避免设备被占用。
+3. 在设备管理器确认振镜控制器串口号，例如 `COM3`。
+4. 启动 HTMSR，进入 `在线采集`。
+5. 点 `刷新设备`，确认左右相机能枚举出来。
+6. 取消 `使用模拟采集`。
+7. 先点 `采集保存`，确认能生成 `left/right` 图像。
+8. 放置棋盘格，点 `一键自动标定`，确认生成有效 `stereo_calibration.yml`。
+9. 换线激光扫描场景，点 `一键扫描重建`。
+10. 查看日志中的中心线、匹配率、点数和失败原因。
+
+## 点云显示说明
+
+当前项目支持两种点云显示模式：
+
+| 模式 | 说明 |
+|---|---|
+| VTK 三维视图 | 使用 `QVTKOpenGLNativeWidget + PCLVisualizer`，可交互旋转缩放。 |
+| 占位视图 | 只显示点数和提示文字，仍可标定、重建和导出点云。 |
+
+当前 Release 构建如果检测到 `VTK::GUISupportQt` 只有 Debug 导入库，会自动禁用内嵌 VTK 视图，避免 Release 程序加载 `Qt5Cored.dll` 这类 Debug Qt DLL。Debug 构建仍可使用现有 Debug VTK 视图。
+
+如果要让 Release 也内嵌显示点云，需要准备完整的 Release 版 VTK Qt 库，至少要有匹配的 `vtkGUISupportQt-9.1.dll` 和对应 Release `.lib`。
+
+## 测试素材
+
+建议测试素材按用途分开：
+
+```text
+test/
+|-- 01_calibration/
+|-- 02_reconstruction/
+|-- 03_reference_results/
+|-- 04_actual_outputs/
+```
+
+推荐含义：
+
+| 目录 | 用途 |
+|---|---|
+| `01_calibration` | 左右棋盘格标定图像。 |
+| `02_reconstruction` | 左右线激光重建图像。 |
+| `03_reference_results` | 参考点云或标准输出结果。 |
+| `04_actual_outputs` | 当前程序实际输出结果。 |
+
+注意：标定图像目录和重建图像目录不能混用。标定图像是棋盘格，重建图像是线激光扫描图。
+
+## 打包和迁移
+
+只给别人测试运行时，推荐使用打包脚本：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package-HtmsrRelease.ps1 -Configuration Release -Clean
+```
+
+输出目录：
+
+```text
+C:\PROJECT\HTMSR\out\package\HTMSR_release
+```
+
+另一台电脑直接复制整个 `HTMSR_release` 目录运行，不要只复制 exe。
+
+如果另一台电脑需要接真实海康相机，还需要安装 MVS 客户端/运行时，并先在 MVS 中确认相机可用。如果需要接振镜控制器，还需要安装对应串口驱动。
+
+## 常见问题
+
+**程序启动提示缺少 Qt platform plugin**
+
+检查：
+
+```text
+platforms/qwindows.dll
+qt.conf
+```
+
+是否和 `htmsr_app.exe` 在同一个发布目录结构中。
+
+**Release 弹出 Qt5Cored.dll 或 QWidget before QApplication**
+
+这是 Release 混入 Debug Qt/VTK 运行库的典型表现。当前 CMake 已增加保护：非 Debug 构建如果只能找到 Debug 的 `VTK::GUISupportQt`，会自动退回占位点云视图。重新配置并构建 Release 即可。
+
+**在线采集枚举不到相机**
+
+先检查：
+
+- MVS 客户端能否看到相机。
+- MVS 客户端是否仍在占用相机。
+- `HTMSR_ENABLE_HIK_CAMERA` 是否为 `ON`。
+- `HIK_MVS_ROOT` 和 `HIK_MVS_RUNTIME_DIR` 是否正确。
+- GigE 相机的 IP、网卡、Jumbo Frame、防火墙是否正常。
+
+**重建点云形状很怪**
+
+优先检查：
+
+- 标定文件是否来自同一套真实左右相机。
+- 标定图像分辨率是否和重建图像一致。
+- ROI 是否覆盖激光条纹。
+- 每帧日志中的 `leftLine/rightLine/matched/matchErrMean/matchErrMax/reason`。
+- 左右图像文件是否一一配对。
+
+## 关键代码入口
+
+| 功能 | 代码 |
+|---|---|
+| 双目标定 | `src/core/CalibrationService.*` |
+| 激光中心线提取 | `src/core/LaserExtractionService.*` |
+| 三维重建 | `src/core/ReconstructionService.*` |
+| 点云导出 | `src/core/PointCloudService.*` |
+| 文件扫描与排序 | `src/core/FileSystemUtils.*` |
+| 海康相机设备 | `src/app/acquisition/HikCameraDevice.*` |
+| 双海康相机 Provider | `src/app/acquisition/HikStereoCameraProvider.*` |
+| 振镜串口控制 | `src/app/acquisition/GalvoController.*` |
+| 在线采集服务 | `src/app/services/AcquisitionService.*` |
+| 自动标定采集 | `src/app/services/IntegratedCalibrationCaptureService.*` |
+| 扫描重建工作流 | `src/app/services/IntegratedScanService.*` |
+| 主窗口任务编排 | `src/app/ui/MainWindow.*` |
+| 参数面板 | `src/app/ui/ParameterPanel.*` |
+| 在线采集面板 | `src/app/ui/AcquisitionPanel.*` |
+
+## 后续开发建议
+
+- 优先补强左右图像配对：按文件名编号或时间戳严格配对，避免缺帧后整体错位。
+- 标定阶段增加质量门槛：有效双目对数、RMS、每图误差过大时不要静默保存。
+- 重建匹配阶段加入极线搜索窗口、唯一匹配和左右一致性检查。
+- 真机联调振镜协议时，补充设备回包格式解析和更清晰的错误码映射。
+- 在线采集后续可以增加实时预览，但当前优先保证保存图像、自动标定、自动重建这条闭环稳定。
+
+## 相关文档
+
+- `docs/HTMSR_开发环境表.md`
+- `docs/prepare.md`
+- `docs/环境路径配置脚本说明.md`
+- `docs/standard.md`
+- `C:/Users/Administrator/Desktop/振镜通信协议.docx`
+
+后续如果项目结构、依赖版本、在线采集流程或标定/重建策略发生变化，应优先同步更新本 README。

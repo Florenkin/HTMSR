@@ -1217,3 +1217,59 @@ Logger::instance().info("test", "ok");
 - 文件与路径规范
 
 它现在已经可以作为 HTMSR 项目的代码规范主文档持续使用。后续新增规范时，继续在这份文档中扩展，不再拆分新的临时规范文档。
+
+## 14. Qt / VTK 构建类型规范
+
+### 14.1 目标
+
+本节用于约束 Qt、VTK、PCL 等可视化相关依赖的构建类型，避免 Release 程序误加载 Debug DLL，或 Debug 程序误加载 Release DLL。
+
+该问题在 HTMSR 中曾表现为 Release 启动时报错：
+
+```text
+QWidget: Must construct a QApplication before a QWidget
+```
+
+根因通常不是 `QApplication` 真的没有创建，而是 Release 程序加载了 `Qt5Cored.dll`、`Qt5Widgetsd.dll`、`vtk...d.dll` 等 Debug 依赖，导致 Qt 全局状态异常。
+
+### 14.2 强制规则
+
+1. Release 构建不得加载任何带 `d` 后缀的 Qt / VTK Debug DLL。
+2. Debug 构建不得混用 Release 版 Qt / VTK import lib。
+3. `VTK::GUISupportQt` 只有 Debug import lib 时，Release 必须禁用内嵌 VTK 点云视图或退回占位视图。
+4. 不允许为了让程序临时启动，把 Debug DLL 复制到 Release 输出目录。
+5. 点云显示依赖不可用时，应保证标定、重建、点云导出仍然可用。
+
+### 14.3 推荐写法
+
+在 CMake 中优先按构建类型判断 VTK Qt 支持库是否可用。如果 Release 只能找到 Debug 版 VTK Qt 支持库，应自动关闭 `HTMSR_WITH_VTK_VIEWER`：
+
+```cmake
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    # Release 不允许链接 Debug 版 VTK Qt 支持库。
+    set(HTMSR_WITH_VTK_VIEWER 0)
+endif()
+```
+
+实际项目中可以根据 imported target 的 `IMPORTED_IMPLIB_RELEASE`、`IMPORTED_LOCATION_RELEASE`、`IMPORTED_IMPLIB_DEBUG` 等属性做更精确判断。
+
+### 14.4 检查清单
+
+每次调整 Qt、VTK、PCL 路径后，至少检查：
+
+1. Release 输出目录是否包含 `Qt5Cored.dll`。
+2. Release 输出目录是否包含 `vtk*9.1d.dll`。
+3. 运行日志或调试器模块列表中是否加载了 Debug 版 Qt / VTK。
+4. 点云视图不可用时，界面是否显示占位提示，而不是直接崩溃。
+5. 禁用 VTK 视图后，标定、重建、导出点云是否保持原行为。
+
+### 14.5 文档同步要求
+
+如果后续重新编译或替换 VTK，需要同步更新：
+
+- `README.md`
+- `docs/HTMSR_开发环境表.md`
+- `docs/prepare.md`
+- `docs/环境路径配置脚本说明.md`
+
+这样可以避免新电脑部署时再次出现 Debug / Release 依赖混用问题。

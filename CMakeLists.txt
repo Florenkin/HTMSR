@@ -235,9 +235,103 @@ target_link_libraries(htmsr_app
         Qt5::OpenGL
 )
 
+get_target_property(HTMSR_QT_QMAKE_EXECUTABLE Qt5::qmake IMPORTED_LOCATION)
+if(HTMSR_QT_QMAKE_EXECUTABLE)
+    get_filename_component(HTMSR_QT_BIN_DIR "${HTMSR_QT_QMAKE_EXECUTABLE}" DIRECTORY)
+endif()
+
+if(NOT HTMSR_QT_BIN_DIR AND Qt5_DIR)
+    get_filename_component(HTMSR_QT_CMAKE_PARENT "${Qt5_DIR}" DIRECTORY)
+    get_filename_component(HTMSR_QT_LIB_DIR "${HTMSR_QT_CMAKE_PARENT}" DIRECTORY)
+    get_filename_component(HTMSR_QT_ROOT "${HTMSR_QT_LIB_DIR}" DIRECTORY)
+    set(HTMSR_QT_BIN_DIR "${HTMSR_QT_ROOT}/bin")
+endif()
+
+if(HTMSR_QT_BIN_DIR)
+    set(HTMSR_WINDEPLOYQT_EXECUTABLE "${HTMSR_QT_BIN_DIR}/windeployqt.exe")
+endif()
+
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/qt.conf"
+    CONTENT "[Paths]\nPlugins = .\n")
+
 if(MSVC)
     target_compile_options(htmsr_app PRIVATE /utf-8)
 endif()
+
+if(EXISTS "${HTMSR_WINDEPLOYQT_EXECUTABLE}")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(HTMSR_WINDEPLOYQT_MODE "--debug")
+    else()
+        set(HTMSR_WINDEPLOYQT_MODE "--release")
+    endif()
+
+    add_custom_command(TARGET htmsr_app POST_BUILD
+        COMMAND "${HTMSR_WINDEPLOYQT_EXECUTABLE}"
+            "${HTMSR_WINDEPLOYQT_MODE}"
+            --no-translations
+            --no-quick-import
+            --no-opengl-sw
+            --dir "$<TARGET_FILE_DIR:htmsr_app>"
+            "$<TARGET_FILE:htmsr_app>"
+        COMMENT "Deploying Qt runtime with windeployqt")
+else()
+    message(WARNING "windeployqt.exe was not found. Visual Studio may rely on PATH to locate Qt runtime DLLs.")
+endif()
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(HTMSR_QT_IMPORTED_CONFIG DEBUG)
+else()
+    set(HTMSR_QT_IMPORTED_CONFIG RELEASE)
+endif()
+
+foreach(qt_target Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Concurrent Qt5::OpenGL)
+    get_target_property(HTMSR_QT_IMPORTED_DLL "${qt_target}" "IMPORTED_LOCATION_${HTMSR_QT_IMPORTED_CONFIG}")
+    if(HTMSR_QT_IMPORTED_DLL)
+        add_custom_command(TARGET htmsr_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HTMSR_QT_IMPORTED_DLL}"
+                "$<TARGET_FILE_DIR:htmsr_app>"
+            COMMENT "Copying ${qt_target} runtime")
+    endif()
+endforeach()
+
+if(HTMSR_QT_BIN_DIR)
+    get_filename_component(HTMSR_QT_ROOT "${HTMSR_QT_BIN_DIR}" DIRECTORY)
+    set(HTMSR_QT_PLUGINS_DIR "${HTMSR_QT_ROOT}/plugins")
+
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(HTMSR_QT_PLATFORM_PLUGIN "qwindowsd.dll")
+        set(HTMSR_QT_STYLE_PLUGIN "qwindowsvistastyled.dll")
+    else()
+        set(HTMSR_QT_PLATFORM_PLUGIN "qwindows.dll")
+        set(HTMSR_QT_STYLE_PLUGIN "qwindowsvistastyle.dll")
+    endif()
+
+    if(EXISTS "${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_PLATFORM_PLUGIN}")
+        add_custom_command(TARGET htmsr_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:htmsr_app>/platforms"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_PLATFORM_PLUGIN}"
+                "$<TARGET_FILE_DIR:htmsr_app>/platforms/${HTMSR_QT_PLATFORM_PLUGIN}"
+            COMMENT "Copying Qt platform plugin")
+    endif()
+
+    if(EXISTS "${HTMSR_QT_PLUGINS_DIR}/styles/${HTMSR_QT_STYLE_PLUGIN}")
+        add_custom_command(TARGET htmsr_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:htmsr_app>/styles"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HTMSR_QT_PLUGINS_DIR}/styles/${HTMSR_QT_STYLE_PLUGIN}"
+                "$<TARGET_FILE_DIR:htmsr_app>/styles/${HTMSR_QT_STYLE_PLUGIN}"
+            COMMENT "Copying Qt style plugin")
+    endif()
+endif()
+
+add_custom_command(TARGET htmsr_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_BINARY_DIR}/qt.conf"
+        "$<TARGET_FILE_DIR:htmsr_app>/qt.conf"
+    COMMENT "Copying qt.conf")
 
 if(HTMSR_ENABLE_HIK_CAMERA)
     target_include_directories(htmsr_app PRIVATE "${HIK_MVS_INCLUDE_DIR}")
@@ -270,7 +364,19 @@ if(HTMSR_ENABLE_VTK_VIEWER)
         InteractionStyle
     )
 
-    if(PCL_VISUALIZATION_FOUND AND VTK_FOUND)
+    set(HTMSR_CAN_LINK_VTK_VIEWER TRUE)
+    if(VTK_FOUND AND TARGET VTK::GUISupportQt AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        get_target_property(HTMSR_VTK_QT_IMPLIB_RELEASE VTK::GUISupportQt IMPORTED_IMPLIB_RELEASE)
+        get_target_property(HTMSR_VTK_QT_LOCATION_RELEASE VTK::GUISupportQt IMPORTED_LOCATION_RELEASE)
+        get_target_property(HTMSR_VTK_QT_IMPLIB_DEBUG VTK::GUISupportQt IMPORTED_IMPLIB_DEBUG)
+        if((NOT HTMSR_VTK_QT_IMPLIB_RELEASE AND NOT HTMSR_VTK_QT_LOCATION_RELEASE) AND HTMSR_VTK_QT_IMPLIB_DEBUG)
+            message(WARNING "VTK::GUISupportQt only provides a Debug import library in this environment. "
+                "Disabling the embedded VTK viewer for this non-Debug build to avoid loading Qt debug DLLs.")
+            set(HTMSR_CAN_LINK_VTK_VIEWER FALSE)
+        endif()
+    endif()
+
+    if(PCL_VISUALIZATION_FOUND AND VTK_FOUND AND HTMSR_CAN_LINK_VTK_VIEWER)
         htmsr_normalize_compile_definitions(HTMSR_PCL_VISUALIZATION_DEFINITIONS ${PCL_DEFINITIONS})
         set(PCL_DEFINITIONS "${HTMSR_PCL_VISUALIZATION_DEFINITIONS}")
         htmsr_sanitize_imported_compile_definitions(${PCL_LIBRARIES})
@@ -287,7 +393,7 @@ if(HTMSR_ENABLE_VTK_VIEWER)
             MODULES ${VTK_LIBRARIES}
         )
     else()
-        message(WARNING "PCL visualization or VTK Qt components were not found. Building with a placeholder point cloud view.")
+        message(WARNING "PCL visualization or compatible VTK Qt components were not found. Building with a placeholder point cloud view.")
         target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=0)
     endif()
 else()

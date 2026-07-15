@@ -2,387 +2,369 @@
 
 ## 1. 文档目的
 
-本文档用于说明以下内容：
+本文档用于指导在当前电脑或另一台电脑上准备、构建、运行和测试 HTMSR。内容覆盖：
 
-- 如何在另一台电脑上从 Git 下载 `HTMSR` 项目到本地
-- 如何准备项目依赖环境
-- 如何生成本机 `CMake` 配置
-- 如何编译、打包并运行项目
-- 如何进行基础功能测试
-
-本文档面向两种使用场景：
-
-- 开发测试：需要在另一台电脑上继续编译、调试项目
-- 运行测试：只需要把可执行程序和依赖复制到另一台电脑上直接运行
+- 从 GitHub 获取项目
+- 配置第三方依赖
+- 编译 Debug / Release
+- 打包可运行程序
+- 准备离线标定和重建素材
+- 测试海康相机在线采集
+- 测试振镜/激光控制器联动流程
 
 ## 2. 两种测试方式
 
 ### 2.1 开发测试
 
-适用于以下情况：
-
-- 需要在另一台电脑上修改代码
-- 需要重新编译 `Debug` / `Release`
-- 需要验证本机环境是否完整
-
-这种方式需要准备完整开发环境，包括：
+适用于需要改代码、调试、重新编译的场景。需要准备完整开发环境：
 
 - Visual Studio 2022
 - CMake
 - Ninja
+- Git
 - Qt 5.15.2
 - OpenCV 4.5.0
-- PCL 1.12.1
 - Eigen
+- PCL 1.12.1
+- VTK 9.1 Qt 支持库，或 PCL 自带 VTK
 - 海康 MVS SDK
-- 可选的 VTK 9.1 Qt 版
 
 ### 2.2 运行测试
 
-适用于以下情况：
+适用于只验证软件能否运行、离线流程能否跑通、点云能否显示或导出的场景。此时可以直接使用打包目录，不一定需要安装完整开发环境。
 
-- 只需要验证程序能否启动
-- 只需要验证离线重建、导出、日志等功能
-- 不在测试机上改代码
+如果要连接真实海康相机，运行测试机仍然需要安装 MVS 运行时和相机驱动。
 
-这种方式不需要完整开发环境，只需要复制打包后的发布目录。
+## 3. 获取项目
 
-## 3. Git 下载项目
+推荐目录：
 
-在另一台电脑上打开 `PowerShell` 或 `Visual Studio 2022 Developer PowerShell`，执行：
+```text
+C:/PROJECT/HTMSR
+```
+
+克隆仓库：
 
 ```powershell
-git clone <仓库地址> C:\PROJECT\HTMSR
+git clone https://github.com/Florenkin/HTMSR.git C:\PROJECT\HTMSR
 ```
 
-如果已经存在旧目录，建议先确认里面没有需要保留的本地修改，再重新拉取。
+如果网络不稳定，可以先在浏览器确认 GitHub 能正常访问，再用 Visual Studio 或命令行执行拉取。
 
-## 4. 开发环境准备
+## 4. 准备依赖
 
-### 4.1 必装工具
+建议依赖目录保持如下结构：
 
-建议安装：
+```text
+C:/ENVIORNMENT/qt/5.15.2/msvc2019_64
+C:/ENVIORNMENT/opencv_450_vs2019
+C:/ENVIORNMENT/PCL/PCL 1.12.1
+C:/ENVIORNMENT/ceresLib/Eigen
+C:/ENVIORNMENT/MVS
+C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64
+```
 
-- `Visual Studio 2022 Community` 或更高版本
-- VS 工作负载：`Desktop development with C++`
-- `Git`
+注意：项目当前使用的目录拼写是 `ENVIORNMENT`，保持一致可以减少配置修改。
 
-建议确认以下命令可用：
+## 5. 生成本机配置
+
+首次迁移到新电脑时，建议运行：
 
 ```powershell
-cmake --version
-ninja --version
-git --version
+cd C:\PROJECT\HTMSR
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Configure-HtmsrEnvironment.ps1 -CreateDefault
 ```
 
-### 4.2 依赖目录建议
-
-建议另一台电脑也按如下路径组织依赖：
+然后打开并检查：
 
 ```text
-C:\ENVIORNMENT\qt\5.15.2\msvc2019_64
-C:\ENVIORNMENT\opencv_450_vs2019
-C:\ENVIORNMENT\PCL\PCL 1.12.1
-C:\ENVIORNMENT\ceresLib\Eigen
-C:\ENVIORNMENT\MVS
+C:/PROJECT/HTMSR/scripts/htmsr_environment.local.json
 ```
 
-如果你已经准备了单独的 VTK Qt 版本，建议路径为：
-
-```text
-C:\ENVIORNMENT\VTK\VTK-9.1.0-qt5-release
-```
-
-### 4.3 海康运行时
-
-如果要测试海康相机在线采集，还需要确认运行时目录存在：
-
-```text
-C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64
-```
-
-至少应能找到：
-
-```text
-MvCameraControl.dll
-```
-
-## 5. 本机环境配置
-
-项目使用本地环境配置文件来生成 `CMakeUserPresets.json`。
-
-### 5.1 检查或编辑本地配置
-
-编辑文件：
-
-[htmsr_environment.local.json](/C:/PROJECT/HTMSR/scripts/htmsr_environment.local.json)
-
-根据另一台电脑的真实路径修改以下字段：
-
-```json
-{
-  "qtRoot": "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64",
-  "opencvRoot": "C:/ENVIORNMENT/opencv_450_vs2019",
-  "pclRoot": "C:/ENVIORNMENT/PCL/PCL 1.12.1",
-  "vtkRoot": "C:/ENVIORNMENT/VTK/VTK-9.1.0-qt5-release",
-  "eigenIncludeDir": "C:/ENVIORNMENT/ceresLib/Eigen",
-  "mvsRoot": "C:/ENVIORNMENT/MVS",
-  "mvsRuntimeDir": "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64",
-  "enableHikCamera": true,
-  "enableVtkViewer": true
-}
-```
-
-说明：
-
-- 如果没有单独的 VTK Qt 版本，可以先把 `vtkRoot` 留空
-- `enableHikCamera=false` 时可跳过海康 SDK 相关测试
-- `enableVtkViewer=true` 只表示尝试启用点云三维视图，是否真正可用取决于 VTK Qt 模块是否完整
-
-### 5.2 生成本机 CMake 预设
-
-在项目根目录执行：
+确认依赖路径正确后执行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Configure-HtmsrEnvironment.ps1 -NoPrompt
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Configure-HtmsrEnvironment.ps1 -Configure
 ```
 
-成功后会生成：
+脚本会生成：
 
-[CMakeUserPresets.json](/C:/PROJECT/HTMSR/CMakeUserPresets.json)
+```text
+C:/PROJECT/HTMSR/CMakeUserPresets.json
+```
 
-同时会做一轮依赖路径检查。
+后续本机配置优先使用 `local-*` 预设，不需要直接改仓库内的 `CMakePresets.json`。
 
 ## 6. 编译项目
 
-### 6.1 Debug 编译
+Debug：
+
+```powershell
+cmake --preset vs2022-x64-debug
+cmake --build --preset debug
+```
+
+Release：
+
+```powershell
+cmake --preset vs2022-x64-release
+cmake --build --preset release
+```
+
+使用本机 local 预设时：
 
 ```powershell
 cmake --preset local-vs2022-x64-debug
 cmake --build --preset local-debug
-```
 
-### 6.2 Release 编译
-
-```powershell
 cmake --preset local-vs2022-x64-release
 cmake --build --preset local-release
 ```
 
-### 6.3 Visual Studio 中使用
+## 7. 运行程序
 
-在 Visual Studio 中打开：
-
-```text
-C:\PROJECT\HTMSR
-```
-
-然后选择对应预设：
-
-- `local-vs2022-x64-debug`
-- `local-vs2022-x64-release`
-
-## 7. 打包项目
-
-### 7.1 Debug 包
-
-适用于开发机调试和功能验证：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package-HtmsrRelease.ps1 -Configuration Debug -Clean
-```
-
-输出目录：
+Debug 输出目录通常为：
 
 ```text
-C:\PROJECT\HTMSR\out\package\HTMSR_debug
+C:/PROJECT/HTMSR/out/build/vs2022-x64-debug/src/app/Debug
 ```
 
-说明：
+Release 输出目录通常为：
 
-- Debug 包会复制 Qt/OpenCV/PCL/VTK/MVS 相关 DLL
-- Debug 包依赖 VS Debug Runtime，更适合开发机
+```text
+C:/PROJECT/HTMSR/out/build/vs2022-x64-release/src/app/Release
+```
 
-### 7.2 Release 包
+如果通过 Visual Studio 运行，确认顶部配置选择的是当前刚构建过的配置。例如 Release 运行前要先完成 Release 构建，否则可能打开旧版本程序。
 
-适用于另一台电脑直接运行：
+## 8. 打包发布目录
+
+运行：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package-HtmsrRelease.ps1 -Configuration Release -Clean
 ```
 
-输出目录：
+打包目录会包含可执行文件和必要运行时依赖。复制到另一台电脑时，优先复制整个打包目录，不要只复制单个 `htmsr_app.exe`。
+
+## 9. 离线标定测试
+
+### 9.1 输入素材
+
+标定图像应放在左右目录中，并且文件名顺序能够一一配对：
 
 ```text
-C:\PROJECT\HTMSR\out\package\HTMSR_release
+test/01_calibration/.../left
+test/01_calibration/.../right
 ```
 
-说明：
+棋盘格参数需要与图片真实棋盘一致：
 
-- Release 包会复制 `exe` 同级运行所需 DLL
-- 更适合普通测试机直接使用
+- 棋盘宽：内角点列数
+- 棋盘高：内角点行数
+- 方格宽/高：实际物理尺寸，单位由项目参数决定，通常按 mm 记录
 
-## 8. 另一台电脑直接运行测试
+### 9.2 操作流程
 
-如果不需要编译，只需要复制整个目录：
+1. 在项目参数页选择左标定目录和右标定目录。
+2. 设置正确的棋盘格参数。
+3. 点击标定按钮。
+4. 查看日志中的有效图像数量、失败图像数量和 RMS。
+5. 标定成功后确认生成 `stereo_calibration.yml`。
+
+### 9.3 判断结果
+
+RMS 越小越好，但不能只看 RMS。还要看：
+
+- 左右角点是否大多数成功检测
+- 双目有效配对数量是否足够
+- 左右图像是否确实是一一对应的同一姿态
+- 棋盘格物理尺寸是否填写正确
+
+OpenCV 官方样例棋盘图只能用于流程测试，不能代表项目真实相机系统的标定结果。
+
+## 10. 离线重建测试
+
+### 10.1 输入素材
+
+重建图像应放在：
 
 ```text
-C:\PROJECT\HTMSR\out\package\HTMSR_release
+test/02_reconstruction/.../left
+test/02_reconstruction/.../right
 ```
 
-到另一台电脑任意位置，例如：
+左右文件名排序后必须一一配对，否则匹配和三维恢复会明显异常。
+
+### 10.2 操作流程
+
+1. 选择左右重建图像目录。
+2. 选择或填写已有标定文件 `stereo_calibration.yml`。
+3. 设置 ROI、灰度阈值、最小灰度、匹配距离等重建参数。
+4. 点击重建。
+5. 查看日志中的每帧诊断摘要。
+6. 对照 `test/03_reference_results` 判断点云形态是否合理。
+
+### 10.3 重点日志
+
+当前重建日志会输出每帧诊断信息，包括：
+
+- 左右中心线点数
+- 左右中心线覆盖率
+- 匹配点数和匹配率
+- 平均/最大匹配误差
+- 三维点包围盒
+- 失败原因
+
+如果点云为 0，优先看失败原因是 `left_empty`、`right_empty`、`both_empty`、`match_empty` 还是 `points_empty`。
+
+## 11. 在线采集测试
+
+在线采集页目前分成两部分：
+
+- 相机采集：控制海康双相机
+- 振镜控制：通过串口控制振镜、激光器和扫描参数
+
+### 11.1 相机采集参数
+
+界面中的相机参数会在执行采集任务时下发给真实海康相机，主要包括：
+
+- 左相机设备
+- 右相机设备
+- 是否使用模拟采集
+- 采集帧数
+- 保存目录
+- 曝光时间 us
+- 增益
+- 是否硬触发
+- 触发线
+- 超时时间 ms
+
+注意：修改输入框本身通常不会立即写入相机，参数会在点击 `采集保存`、`一键自动标定` 或 `一键扫描重建` 时统一读取并下发。
+
+### 11.2 振镜控制参数
+
+振镜控制对应 `振镜通信协议.docx` 中的串口协议参数，主要包括：
+
+- 串口号
+- 波特率
+- 命令超时
+- 同步/异步模式
+- 扫描方向
+- 抓图间隔
+- 连续模式等待间隔
+- 步进角度
+- 自动旋转角度
+- 正向速度
+- 反向速度
+- 激光占空比
+- 电压范围
+- 扫描前强制重标
+
+这些参数控制的是振镜/电机/激光控制器，不是海康相机本身。
+
+## 12. 一键自动标定
+
+用途：在线采集左右棋盘格图片，并调用现有 `CalibrationService` 生成标定文件。
+
+推荐流程：
+
+1. 连接左右相机。
+2. 在相机前放置棋盘格标定板。
+3. 设置曝光、增益、采集帧数和保存目录。
+4. 点击 `刷新设备`。
+5. 选择左相机和右相机。
+6. 点击 `一键自动标定`。
+7. 查看日志和弹窗中的 RMS。
+
+该流程默认不依赖振镜扫描动作，因为棋盘格标定素材和线激光扫描素材不是同一类图像。
+
+## 13. 一键扫描重建
+
+用途：复用已有有效标定文件，执行振镜参数下发、双相机采集、图像落盘、三维重建和点云刷新。
+
+推荐流程：
+
+1. 确认已有有效 `stereo_calibration.yml`。
+2. 连接左右相机和振镜控制器串口。
+3. 设置相机曝光、增益、触发模式、采集帧数。
+4. 设置振镜同步模式、步进角度、旋转角度、速度、激光占空比等参数。
+5. 点击 `一键扫描重建`。
+6. 查看日志中的采集帧数、是否复用标定、每帧重建诊断和总点数。
+
+如果缺少有效标定文件，流程会中止并提示先执行自动标定，而不是用扫描图像直接标定。
+
+## 14. 常见问题
+
+### 14.1 点云数量为 0
+
+优先检查：
+
+- ROI 是否覆盖激光线
+- 灰度阈值是否过高
+- 左右重建图像是否配对
+- 标定文件是否与当前相机和镜头一致
+- 日志失败原因是否为 `left_empty`、`right_empty`、`match_empty`
+
+### 14.2 点云形状奇怪
+
+优先检查：
+
+- 双目标定 RMS 和有效配对数量
+- 棋盘格参数是否正确
+- 左右相机是否拿反
+- 左右图像是否时间同步
+- 激光线提取是否包含大量噪声
+- 匹配误差是否过大
+- 与 `test/03_reference_results` 的坐标范围和整体形态是否接近
+
+### 14.3 Release 启动报 Qt 错误
+
+如果出现：
 
 ```text
-D:\Test\HTMSR_release
+QWidget: Must construct a QApplication before a QWidget
 ```
 
-然后直接运行：
+通常是 Release 程序加载了 Debug 版 Qt/VTK DLL。需要确认：
+
+- Release 目录不要出现 `Qt5Cored.dll`
+- Release 不要加载 `vtk...d.dll`
+- CMake 已重新配置，不要继续运行旧 exe
+
+### 14.4 Qt platform plugin 初始化失败
+
+如果出现：
 
 ```text
-htmsr_app.exe
+no Qt platform plugin could be initialized
 ```
 
-注意：
-
-- 不要只复制 `exe`
-- 必须连同 `platforms`、`imageformats`、`styles`、所有 DLL 一起复制
-
-## 9. 在线采集说明
-
-### 9.1 当前已实现能力
-
-当前在线采集功能已经具备以下能力：
-
-- 枚举海康相机
-- 选择左右相机
-- 配置曝光、增益、触发模式、超时
-- 抓取左右图像
-- 保存为标准 `left/right` 图像目录
-
-采集保存结构如下：
+检查程序目录下是否存在：
 
 ```text
-输出目录/
-  capture_YYYYMMDD_HHMMSS/
-    left/
-      frame_000001.bmp
-      frame_000002.bmp
-    right/
-      frame_000001.bmp
-      frame_000002.bmp
+platforms/qwindows.dll
 ```
 
-### 9.2 当前限制
+打包脚本或 Qt 的 `windeployqt` 应负责复制该插件。
 
-当前版本更准确的工作模式是：
+### 14.5 找不到相机
 
-- 在线采集
-- 保存左右图像
-- 再走离线标定 / 离线重建
+检查：
 
-尚未完成以下现场验证：
+- 相机网线/USB 连接
+- 海康 MVS 驱动是否安装
+- MVS 客户端是否占用相机
+- 防火墙和网卡 IP 是否正确
+- 界面是否勾选了模拟采集
 
-- 双海康真实硬件同步联调
-- 长时间稳定性验证
-- 边采集边重建的实时闭环
+## 15. 推荐测试顺序
 
-## 10. 点云显示说明
-
-### 10.1 占位视图与真实视图
-
-项目中的点云页有两种模式：
-
-- 占位视图：程序可运行，但只显示提示文字或点数
-- 真实三维视图：通过 `VTK + QVTKOpenGLNativeWidget + PCLVisualizer` 显示可旋转缩放点云
-
-### 10.2 当前判断标准
-
-如果 CMake 配置时出现以下警告：
-
-```text
-PCL visualization or VTK Qt components were not found. Building with a placeholder point cloud view.
-```
-
-则说明当前构建仍然是占位视图。
-
-如果要真正显示点云，VTK 安装目录里至少应存在：
-
-```text
-vtkGUISupportQt-9.1.dll
-vtkViewsQt-9.1.dll
-```
-
-## 11. 基础测试清单
-
-### 11.1 启动测试
-
-- 程序是否能正常启动
-- 是否还存在缺失 DLL 报错
-- 日志区是否显示 `HTMSR started.`
-
-### 11.2 离线重建测试
-
-- 导入左右标定图像目录
-- 导入左右重建图像目录
-- 加载或生成 `stereo_calibration.yml`
-- 执行重建
-- 检查日志、左图、右图、调试图、点云统计
-
-### 11.3 在线采集测试
-
-- 刷新设备
-- 检查是否枚举到真实海康相机
-- 配置输出目录
-- 采集若干帧
-- 检查 `left/right` 目录及图像文件是否生成
-
-### 11.4 导出测试
-
-- 导出 `point_cloud.txt`
-- 导出 `point_cloud.pcd`
-- 检查文件是否存在
-
-## 12. 常见问题
-
-### 12.1 程序启动时报缺 DLL
-
-处理方式：
-
-- 确认使用的是完整打包目录，而不是单独的 `exe`
-- 确认 `platforms/qwindows.dll` 存在
-- 重新执行打包脚本
-
-### 12.2 海康设备枚举不到
-
-处理方式：
-
-- 先在 `MVS` 客户端中确认相机能被识别
-- 检查 `MVS Runtime` 路径是否正确
-- 检查网卡、IP、防火墙、触发环境
-
-### 12.3 点云页仍是占位视图
-
-处理方式：
-
-- 检查 `VTK_DIR` 是否指向正确安装目录
-- 检查 `vtkGUISupportQt-9.1.dll` 和 `vtkViewsQt-9.1.dll` 是否存在
-- 重新执行 `cmake --preset ...` 和 `cmake --build ...`
-
-## 13. 推荐交付方式
-
-如果要发给其他人测试，推荐交付：
-
-- Git 仓库地址
-- 本文档 `prepare.md`
-- 一个现成的 `HTMSR_release` 压缩包
-
-推荐压缩包命名：
-
-```text
-HTMSR_release_yyyyMMdd.zip
-```
-
-这样测试人员可以根据情况选择：
-
-- 直接运行发布包
-- 或者按文档准备开发环境后自行编译
+1. 只启动程序，确认界面正常。
+2. 跑离线标定，确认能生成 `stereo_calibration.yml`。
+3. 跑离线重建，确认能生成点云。
+4. 打包 Release，复制到独立目录运行。
+5. 连接真实相机，测试 `刷新设备` 和 `采集保存`。
+6. 采集棋盘格，测试 `一键自动标定`。
+7. 连接振镜串口，测试参数下发。
+8. 最后测试 `一键扫描重建`。
