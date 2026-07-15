@@ -13,11 +13,19 @@
 
 namespace htmsr::app {
 
+/*
+    函数功能：构造在线采集参数面板，初始化设备、曝光、触发和保存目录等控件
+    输入：
+        parent：Qt 父控件
+    输出：
+        无（构造后完成采集面板界面布局和信号连接）
+*/
 AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     : QWidget(parent)
 {
     auto* form = new QFormLayout;
 
+    // 采集面板只维护左右设备、保存目录和一组共享采集参数，首版先覆盖基本闭环。
     leftDeviceCombo_ = new QComboBox;
     rightDeviceCombo_ = new QComboBox;
     useMockProviderCheck_ = new QCheckBox(QString::fromUtf8("使用模拟采集"));
@@ -93,6 +101,13 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     });
 }
 
+/*
+    函数功能：将枚举得到的在线设备列表刷新到左右相机下拉框
+    输入：
+        devices：设备基础信息列表
+    输出：
+        无（函数会更新左右设备下拉框和状态提示文本）
+*/
 void AcquisitionPanel::setDevices(const std::vector<CameraDeviceInfo>& devices)
 {
     leftDeviceCombo_->clear();
@@ -114,6 +129,13 @@ void AcquisitionPanel::setDevices(const std::vector<CameraDeviceInfo>& devices)
         : QString::fromUtf8("已枚举到 %1 台相机").arg(static_cast<qulonglong>(devices.size())));
 }
 
+/*
+    函数功能：从采集面板读取一次双相机采集任务配置
+    输入：
+        无
+    输出：
+        返回值：包含左右设备 id、帧数、输出目录、曝光、增益和触发参数的采集配置
+*/
 StereoCameraConfig AcquisitionPanel::stereoCameraConfig() const
 {
     StereoCameraConfig config;
@@ -135,12 +157,20 @@ StereoCameraConfig AcquisitionPanel::stereoCameraConfig() const
     return config;
 }
 
+/*
+    函数功能：设置采集面板忙碌状态
+    输入：
+        busy：是否正在执行在线采集任务
+    输出：
+        无（函数会启用或禁用刷新与采集按钮）
+*/
 void AcquisitionPanel::setBusy(bool busy)
 {
     refreshButton_->setEnabled(!busy);
     captureButton_->setEnabled(!busy);
 }
 
+// 状态文本统一走只读输入框显示，便于向用户反馈当前枚举和采集结果。
 void AcquisitionPanel::setStatusText(const QString& text)
 {
     statusEdit_->setText(text);

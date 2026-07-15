@@ -20,6 +20,7 @@
 namespace htmsr::app {
 namespace {
 
+// 统一生成按序号递增的离线保存文件名，便于后续左右目录稳定配对。
 std::string frameFileName(int frameIndex)
 {
     std::ostringstream stream;
@@ -27,6 +28,7 @@ std::string frameFileName(int frameIndex)
     return stream.str();
 }
 
+// 采集会话开始前确保输出目录存在，避免写图时因目录缺失直接失败。
 void ensureDirectory(const QString& directory)
 {
     QDir dir(directory);
@@ -38,6 +40,7 @@ void ensureDirectory(const QString& directory)
     }
 }
 
+// 每次采集创建独立的会话目录，并提前生成 left/right 子目录。
 QString createSessionDirectory(const std::string& outputDirectory)
 {
     const QString root = QString::fromStdString(outputDirectory.empty() ? "." : outputDirectory);
@@ -51,6 +54,7 @@ QString createSessionDirectory(const std::string& outputDirectory)
     return sessionDirectory;
 }
 
+// 根据公共设备 id 在当前枚举结果中回查对应设备，避免 UI 层持有 SDK 私有对象。
 CameraDeviceInfo findDeviceById(const std::vector<CameraDeviceInfo>& devices, const std::string& id)
 {
     for (const auto& device : devices) {
@@ -63,6 +67,13 @@ CameraDeviceInfo findDeviceById(const std::vector<CameraDeviceInfo>& devices, co
 
 } // namespace
 
+/*
+    函数功能：枚举当前构建中可用的在线采集设备
+    输入：
+        无
+    输出：
+        返回值：设备基础信息列表；未启用海康 SDK 时返回空列表
+*/
 std::vector<CameraDeviceInfo> AcquisitionService::enumerateDevices() const
 {
 #if HTMSR_WITH_HIK_CAMERA
@@ -73,6 +84,14 @@ std::vector<CameraDeviceInfo> AcquisitionService::enumerateDevices() const
 #endif
 }
 
+/*
+    函数功能：按双相机配置执行一次采集会话，并将左右图像保存到会话目录
+    输入：
+        config：双相机采集配置，包括设备、帧数、输出目录和相机参数
+        progressCallback：采集进度回调，可为空
+    输出：
+        返回值：采集会话结果，包含保存目录、图像路径、预览图和成功失败统计
+*/
 AcquisitionSessionResult AcquisitionService::capture(const StereoCameraConfig& config, ProgressCallback progressCallback) const
 {
     if (config.frameCount <= 0) {
@@ -89,6 +108,7 @@ AcquisitionSessionResult AcquisitionService::capture(const StereoCameraConfig& c
     auto provider = createProvider(config);
 
     for (int frameIndex = 0; frameIndex < config.frameCount && provider->hasNext(); ++frameIndex) {
+        // 每次从采集源取出一组同步左右帧，并以统一文件名保存到 left/right 目录。
         FramePair pair = provider->next();
         const QString fileName = QString::fromStdString(frameFileName(frameIndex));
         const QString leftPath = QDir(QString::fromStdString(result.leftDirectory)).filePath(fileName);
@@ -127,6 +147,13 @@ AcquisitionSessionResult AcquisitionService::capture(const StereoCameraConfig& c
     return result;
 }
 
+/*
+    函数功能：根据采集配置创建具体的图像采集源
+    输入：
+        config：双相机采集配置
+    输出：
+        返回值：采集源抽象接口对象，可能是 Mock 采集源或海康双相机采集源
+*/
 AcquisitionProviderPtr AcquisitionService::createProvider(const StereoCameraConfig& config) const
 {
     if (config.useMockProvider) {

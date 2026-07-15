@@ -2,6 +2,7 @@
   "qtRoot": "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64",
   "opencvRoot": "C:/ENVIORNMENT/opencv_450_vs2019",
   "pclRoot": "C:/ENVIORNMENT/PCL/PCL 1.12.1",
+  "vtkRoot": "",
   "eigenIncludeDir": "C:/ENVIORNMENT/ceresLib/Eigen",
   "mvsRoot": "C:/ENVIORNMENT/MVS",
   "mvsRuntimeDir": "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64",

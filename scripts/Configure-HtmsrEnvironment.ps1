@@ -7,6 +7,7 @@ param(
     [string]$QtRoot,
     [string]$OpenCvRoot,
     [string]$PclRoot,
+    [string]$VtkRoot,
     [string]$EigenIncludeDir,
     [string]$MvsRoot,
     [string]$MvsRuntimeDir,
@@ -27,6 +28,7 @@ function New-DefaultConfig {
         qtRoot = "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64"
         opencvRoot = "C:/ENVIORNMENT/opencv_450_vs2019"
         pclRoot = "C:/ENVIORNMENT/PCL/PCL 1.12.1"
+        vtkRoot = ""
         eigenIncludeDir = "C:/ENVIORNMENT/ceresLib/Eigen"
         mvsRoot = "C:/ENVIORNMENT/MVS"
         mvsRuntimeDir = "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64"
@@ -162,6 +164,7 @@ $config = Get-Content -Path $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 Set-ConfigProperty $config "qtRoot" $QtRoot
 Set-ConfigProperty $config "opencvRoot" $OpenCvRoot
 Set-ConfigProperty $config "pclRoot" $PclRoot
+Set-ConfigProperty $config "vtkRoot" $VtkRoot
 Set-ConfigProperty $config "eigenIncludeDir" $EigenIncludeDir
 Set-ConfigProperty $config "mvsRoot" $MvsRoot
 Set-ConfigProperty $config "mvsRuntimeDir" $MvsRuntimeDir
@@ -171,6 +174,7 @@ Set-ConfigProperty $config "enableVtkViewer" $EnableVtkViewer
 $qtRoot = ConvertTo-CMakePath (Get-ConfigProperty $config "qtRoot" $defaultConfig.qtRoot)
 $opencvRoot = ConvertTo-CMakePath (Get-ConfigProperty $config "opencvRoot" $defaultConfig.opencvRoot)
 $pclRoot = ConvertTo-CMakePath (Get-ConfigProperty $config "pclRoot" $defaultConfig.pclRoot)
+$vtkRoot = ConvertTo-CMakePath (Get-ConfigProperty $config "vtkRoot" $defaultConfig.vtkRoot)
 $eigenIncludeDir = ConvertTo-CMakePath (Get-ConfigProperty $config "eigenIncludeDir" $defaultConfig.eigenIncludeDir)
 $mvsRoot = ConvertTo-CMakePath (Get-ConfigProperty $config "mvsRoot" $defaultConfig.mvsRoot)
 $mvsRuntimeDir = ConvertTo-CMakePath (Get-ConfigProperty $config "mvsRuntimeDir" $defaultConfig.mvsRuntimeDir)
@@ -179,7 +183,11 @@ $vtkViewerEnabled = ConvertTo-CMakeBool (Get-ConfigProperty $config "enableVtkVi
 
 $opencvDir = Join-CMakePath $opencvRoot "x64/vc16/lib"
 $pclDir = Join-CMakePath $pclRoot "cmake"
-$vtkDir = Join-CMakePath $pclRoot "3rdParty/VTK/lib/cmake/vtk-9.1"
+$vtkDir = if ([string]::IsNullOrWhiteSpace($vtkRoot)) {
+    Join-CMakePath $pclRoot "3rdParty/VTK/lib/cmake/vtk-9.1"
+} else {
+    Join-CMakePath $vtkRoot "lib/cmake/vtk-9.1"
+}
 $boostDir = Join-CMakePath $pclRoot "3rdParty/Boost/lib/cmake/Boost-1.78.0"
 $qhullDir = Join-CMakePath $pclRoot "3rdParty/Qhull/lib/cmake/Qhull"
 $qt5Dir = Join-CMakePath $qtRoot "lib/cmake/Qt5"
@@ -258,7 +266,7 @@ if (-not (Test-HtmsrPath "Qt5Config.cmake" (Join-CMakePath $qt5Dir "Qt5Config.cm
 if (-not (Test-HtmsrPath "OpenCVConfig.cmake" (Join-CMakePath $opencvDir "OpenCVConfig.cmake") $true)) { $missingRequired++ }
 if (-not (Test-HtmsrPath "PCLConfig.cmake" (Join-CMakePath $pclDir "PCLConfig.cmake") $true)) { $missingRequired++ }
 if (-not (Test-HtmsrPath "Eigen/Core" (Join-CMakePath $eigenIncludeDir "Eigen/Core") $true)) { $missingRequired++ }
-Test-HtmsrPath "VTKConfig.cmake (optional embedded viewer)" (Join-CMakePath $vtkDir "VTKConfig.cmake") $false | Out-Null
+Test-HtmsrPath "vtk-config.cmake (optional embedded viewer)" (Join-CMakePath $vtkDir "vtk-config.cmake") $false | Out-Null
 
 if ($hikCameraEnabled -eq "ON") {
     if (-not (Test-HtmsrPath "MvCameraControl.h" $mvsHeader $true)) { $missingRequired++ }

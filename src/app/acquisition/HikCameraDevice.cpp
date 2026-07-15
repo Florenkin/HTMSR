@@ -17,11 +17,13 @@
 namespace htmsr::app {
 namespace {
 
+// 海康 SDK 的字符串字段使用 unsigned char*，这里统一转成标准字符串便于后续处理。
 std::string cString(const unsigned char* value)
 {
     return value ? reinterpret_cast<const char*>(value) : std::string{};
 }
 
+// 将海康 SDK 返回码格式化为十六进制文本，便于对照官方错误码文档排查问题。
 std::string errorText(int code)
 {
     std::ostringstream stream;
@@ -29,6 +31,7 @@ std::string errorText(int code)
     return stream.str();
 }
 
+// 从海康 SDK 设备结构中提取公共设备信息，避免 UI 层依赖 SDK 私有类型。
 CameraDeviceInfo toDeviceInfo(const MV_CC_DEVICE_INFO& sdkInfo, int index)
 {
     CameraDeviceInfo info;
@@ -63,6 +66,7 @@ CameraDeviceInfo toDeviceInfo(const MV_CC_DEVICE_INFO& sdkInfo, int index)
     return info;
 }
 
+// 每次连接或刷新设备前重新枚举 SDK 设备列表，保证设备 id 与当前系统状态一致。
 std::vector<MV_CC_DEVICE_INFO*> enumerateSdkDevices(MV_CC_DEVICE_INFO_LIST& deviceList)
 {
     std::memset(&deviceList, 0, sizeof(deviceList));
@@ -81,6 +85,7 @@ std::vector<MV_CC_DEVICE_INFO*> enumerateSdkDevices(MV_CC_DEVICE_INFO_LIST& devi
     return devices;
 }
 
+// 将海康 SDK 输出的原始像素缓冲转换为 OpenCV Mat，统一后续算法处理入口。
 cv::Mat convertToMat(void* handle, const unsigned char* data, const MV_FRAME_OUT_INFO_EX& frameInfo)
 {
     if (!data || frameInfo.nWidth == 0 || frameInfo.nHeight == 0 || frameInfo.nFrameLen == 0) {
@@ -130,6 +135,13 @@ struct HikCameraDevice::Impl {
     std::vector<unsigned char> frameBuffer;
 };
 
+/*
+    函数功能：枚举当前系统可用的海康工业相机设备
+    输入：
+        无
+    输出：
+        返回值：设备基础信息列表，不暴露任何海康 SDK 私有结构
+*/
 std::vector<CameraDeviceInfo> enumerateHikCameraDevices()
 {
     MV_CC_DEVICE_INFO_LIST deviceList{};
@@ -142,12 +154,20 @@ std::vector<CameraDeviceInfo> enumerateHikCameraDevices()
     return devices;
 }
 
+/*
+    函数功能：构造海康单相机设备适配器
+    输入：
+        info：设备枚举结果中的公共设备信息
+    输出：
+        无（构造后保存设备信息，并初始化内部状态对象）
+*/
 HikCameraDevice::HikCameraDevice(CameraDeviceInfo info)
     : impl_(std::make_unique<Impl>())
 {
     impl_->info = std::move(info);
 }
 
+// 析构时主动断开设备，保证相机句柄和取流状态被正确回收。
 HikCameraDevice::~HikCameraDevice()
 {
     disconnect();
@@ -168,6 +188,13 @@ CameraState HikCameraDevice::state() const
     return impl_->state;
 }
 
+/*
+    函数功能：根据保存的设备 id 重新枚举并连接指定海康相机
+    输入：
+        无
+    输出：
+        返回值：连接成功返回 true，否则返回 false 并写错误日志
+*/
 bool HikCameraDevice::connect()
 {
     if (impl_->state != CameraState::Disconnected) {
@@ -212,6 +239,13 @@ bool HikCameraDevice::connect()
     return true;
 }
 
+/*
+    函数功能：向海康相机下发曝光、增益、触发和缓冲区等基础参数
+    输入：
+        config：单相机采集参数配置
+    输出：
+        返回值：函数执行完成返回 true；不支持的节点仅记录 Warning，不中断流程
+*/
 bool HikCameraDevice::configure(const CameraParameterConfig& config)
 {
     if (!impl_->handle) {
@@ -253,6 +287,13 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
     return true;
 }
 
+/*
+    函数功能：启动海康相机取流
+    输入：
+        无
+    输出：
+        返回值：启动成功返回 true，否则返回 false 并将设备状态置为 Error
+*/
 bool HikCameraDevice::startGrabbing()
 {
     if (!impl_->handle) {
@@ -270,6 +311,13 @@ bool HikCameraDevice::startGrabbing()
     return true;
 }
 
+/*
+    函数功能：停止海康相机取流
+    输入：
+        无
+    输出：
+        无（函数执行后设备状态回到 Connected）
+*/
 void HikCameraDevice::stopGrabbing()
 {
     if (!impl_->handle || impl_->state != CameraState::Streaming) {
@@ -283,6 +331,13 @@ void HikCameraDevice::stopGrabbing()
     impl_->state = CameraState::Connected;
 }
 
+/*
+    函数功能：从海康相机抓取一帧图像并转换为 OpenCV Mat
+    输入：
+        timeoutMs：单帧取流超时时间，单位毫秒
+    输出：
+        返回值：抓取成功时返回图像；失败时返回空 Mat 并写日志
+*/
 cv::Mat HikCameraDevice::grabFrame(int timeoutMs)
 {
     if (!impl_->handle || impl_->state != CameraState::Streaming) {
@@ -308,6 +363,13 @@ cv::Mat HikCameraDevice::grabFrame(int timeoutMs)
     return convertToMat(impl_->handle, impl_->frameBuffer.data(), frameInfo);
 }
 
+/*
+    函数功能：断开海康相机连接并释放 SDK 句柄
+    输入：
+        无
+    输出：
+        无（函数执行后设备状态重置为 Disconnected）
+*/
 void HikCameraDevice::disconnect()
 {
     if (!impl_) {

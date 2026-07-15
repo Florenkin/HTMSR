@@ -26,6 +26,13 @@
 
 namespace htmsr::app {
 
+/*
+    函数功能：构造主窗口，初始化日志桥接、中央视图、Dock、菜单、工具栏和后台任务连接
+    输入：
+        parent：Qt 父控件
+    输出：
+        无（构造后主窗口进入可交互状态）
+*/
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
@@ -70,6 +77,7 @@ MainWindow::MainWindow(QWidget* parent)
     Logger::instance().info("App", "HTMSR started.");
 }
 
+// 析构时等待后台任务退出，避免窗口关闭后仍有线程访问已经销毁的 UI 对象。
 MainWindow::~MainWindow()
 {
     if (calibrationWatcher_.isRunning()) {
@@ -86,6 +94,13 @@ MainWindow::~MainWindow()
     }
 }
 
+/*
+    函数功能：从参数面板读取标定参数并在后台启动双目标定任务
+    输入：
+        无
+    输出：
+        无（函数会切换忙碌状态并启动异步标定）
+*/
 void MainWindow::runCalibration()
 {
     if (calibrationWatcher_.isRunning()) {
@@ -100,6 +115,13 @@ void MainWindow::runCalibration()
     }));
 }
 
+/*
+    函数功能：从磁盘加载已有的双目标定文件
+    输入：
+        无
+    输出：
+        无（加载成功后更新内存中的标定结果，失败时弹出提示）
+*/
 void MainWindow::loadCalibration()
 {
     const QString file = QFileDialog::getOpenFileName(this, QString::fromUtf8("加载标定文件"), QString(), QString::fromUtf8("YAML (*.yml *.yaml);;所有文件 (*.*)"));
@@ -116,6 +138,13 @@ void MainWindow::loadCalibration()
     }
 }
 
+/*
+    函数功能：使用当前参数和标定结果在后台启动离线重建任务
+    输入：
+        无
+    输出：
+        无（函数会校验标定结果并启动异步重建）
+*/
 void MainWindow::runReconstruction()
 {
     if (reconstructionWatcher_.isRunning()) {
@@ -139,6 +168,13 @@ void MainWindow::runReconstruction()
     }));
 }
 
+/*
+    函数功能：导出当前重建结果为 txt 点云文件
+    输入：
+        无
+    输出：
+        无（导出成功时写文件，失败时给出错误提示）
+*/
 void MainWindow::exportTxt()
 {
     if (reconstruction_.mergedPoints.empty()) {
@@ -159,6 +195,13 @@ void MainWindow::exportTxt()
     }
 }
 
+/*
+    函数功能：导出当前重建结果为 pcd 点云文件
+    输入：
+        无
+    输出：
+        无（导出成功时写文件，失败时给出错误提示）
+*/
 void MainWindow::exportPcd()
 {
     if (reconstruction_.mergedPoints.empty()) {
@@ -179,6 +222,7 @@ void MainWindow::exportPcd()
     }
 }
 
+// 将当前项目参数持久化到配置中，并同步刷新左侧资源树显示。
 void MainWindow::saveProjectSettings()
 {
     configService_.save(parameterPanel_->projectConfig());
@@ -186,6 +230,13 @@ void MainWindow::saveProjectSettings()
     Logger::instance().info("App", "Project settings saved.");
 }
 
+/*
+    函数功能：枚举当前可用的在线采集设备，并刷新采集面板下拉框
+    输入：
+        无
+    输出：
+        无（失败时在日志和采集面板中反馈错误）
+*/
 void MainWindow::refreshAcquisitionDevices()
 {
     try {
@@ -197,6 +248,13 @@ void MainWindow::refreshAcquisitionDevices()
     }
 }
 
+/*
+    函数功能：从采集面板读取配置并在后台启动在线采集任务
+    输入：
+        无
+    输出：
+        无（函数会切换忙碌状态并启动异步采集）
+*/
 void MainWindow::runAcquisition()
 {
     if (acquisitionWatcher_.isRunning()) {
@@ -216,6 +274,13 @@ void MainWindow::runAcquisition()
     }));
 }
 
+/*
+    函数功能：处理后台标定任务完成后的 UI 更新
+    输入：
+        无
+    输出：
+        无（函数会恢复忙碌状态、保存标定结果并弹出提示）
+*/
 void MainWindow::onCalibrationFinished()
 {
     setBusy(false, QString());
@@ -228,6 +293,13 @@ void MainWindow::onCalibrationFinished()
     }
 }
 
+/*
+    函数功能：处理后台重建任务完成后的 UI 更新
+    输入：
+        无
+    输出：
+        无（函数会刷新点云视图、调试图和资源树）
+*/
 void MainWindow::onReconstructionFinished()
 {
     setBusy(false, QString());
@@ -247,6 +319,13 @@ void MainWindow::onReconstructionFinished()
     }
 }
 
+/*
+    函数功能：处理后台在线采集任务完成后的 UI 更新
+    输入：
+        无
+    输出：
+        无（函数会更新预览图、采集状态，并在成功时把输出目录回填到重建输入）
+*/
 void MainWindow::onAcquisitionFinished()
 {
     setBusy(false, QString());
@@ -273,6 +352,7 @@ void MainWindow::onAcquisitionFinished()
     }
 }
 
+// 顶部菜单栏负责暴露保存、采集、标定、重建和导出等主流程入口。
 void MainWindow::buildMenus()
 {
     auto* fileMenu = menuBar()->addMenu(QString::fromUtf8("文件"));
@@ -295,6 +375,7 @@ void MainWindow::buildMenus()
     menuBar()->addMenu(QString::fromUtf8("帮助"));
 }
 
+// 工具栏提供最常用的一组快捷操作，便于离线处理和在线采集快速切换。
 void MainWindow::buildToolBar()
 {
     auto* toolbar = addToolBar(QString::fromUtf8("工具"));
@@ -310,6 +391,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(style()->standardIcon(QStyle::SP_DriveHDIcon), QString::fromUtf8("PCD"), this, &MainWindow::exportPcd);
 }
 
+// Dock 区域包括资源树、参数面板、采集面板和日志面板，构成主界面的工作区骨架。
 void MainWindow::buildDocks()
 {
     projectTree_ = new QTreeWidget;
@@ -337,6 +419,7 @@ void MainWindow::buildDocks()
     addDockWidget(Qt::BottomDockWidgetArea, bottomDock);
 }
 
+// 中央区域以标签页形式承载点云视图、左右图像和调试图像。
 void MainWindow::buildCentralView()
 {
     auto* tabs = new QTabWidget;
@@ -351,6 +434,7 @@ void MainWindow::buildCentralView()
     setCentralWidget(tabs);
 }
 
+// 左侧资源树只展示关键输入输出路径和统计信息，避免一次性展开大量图像文件。
 void MainWindow::refreshProjectTree()
 {
     if (!projectTree_) {
@@ -376,6 +460,7 @@ void MainWindow::refreshProjectTree()
     projectTree_->expandAll();
 }
 
+// 忙碌状态统一驱动底部进度条和在线采集面板按钮的可用性。
 void MainWindow::setBusy(bool busy, const QString& text)
 {
     progressBar_->setRange(busy ? 0 : 0, busy ? 0 : 100);
@@ -386,6 +471,7 @@ void MainWindow::setBusy(bool busy, const QString& text)
     }
 }
 
+// 导出路径默认基于当前项目输出目录拼接，减少每次导出时重复选路径。
 QString MainWindow::outputPath(const QString& filename) const
 {
     const auto config = parameterPanel_->projectConfig();

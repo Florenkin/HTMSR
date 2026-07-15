@@ -334,8 +334,14 @@ $config = Get-Content -Path $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $qtRoot = ConvertTo-NativePath (Get-ConfigValue $config "qtRoot" "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64")
 $opencvRoot = ConvertTo-NativePath (Get-ConfigValue $config "opencvRoot" "C:/ENVIORNMENT/opencv_450_vs2019")
 $pclRoot = ConvertTo-NativePath (Get-ConfigValue $config "pclRoot" "C:/ENVIORNMENT/PCL/PCL 1.12.1")
+$vtkRoot = ConvertTo-NativePath (Get-ConfigValue $config "vtkRoot" "")
 $mvsRuntimeDir = ConvertTo-NativePath (Get-ConfigValue $config "mvsRuntimeDir" "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64")
 $hikCameraEnabled = ConvertTo-Boolean (Get-ConfigValue $config "enableHikCamera" $true)
+$vtkBinDir = if ([string]::IsNullOrWhiteSpace($vtkRoot)) {
+    Join-NativePath $pclRoot "3rdParty/VTK/bin"
+} else {
+    Join-NativePath $vtkRoot "bin"
+}
 
 if ([string]::IsNullOrWhiteSpace($BuildDir)) {
     if ($Configuration -eq "Debug") {
@@ -370,6 +376,7 @@ Write-Host ""
 Test-RequiredPath "Qt root" $qtRoot
 Test-RequiredPath "OpenCV bin" (Join-NativePath $opencvRoot "x64/vc16/bin")
 Test-RequiredPath "PCL bin" (Join-NativePath $pclRoot "bin")
+Write-Host ("[Info] VTK bin source: {0}" -f $vtkBinDir)
 if ($hikCameraEnabled) {
     Test-RequiredPath "MVS runtime" $mvsRuntimeDir
 }
@@ -461,7 +468,7 @@ if (Test-Path -LiteralPath $windeployqt -PathType Leaf) {
 
 Copy-DirectoryFiles (Join-NativePath $opencvRoot "x64/vc16/bin") "*.dll" $packageDirPath | Out-Null
 Copy-DirectoryFiles (Join-NativePath $pclRoot "bin") "*.dll" $packageDirPath | Out-Null
-Copy-DirectoryFiles (Join-NativePath $pclRoot "3rdParty/VTK/bin") "*.dll" $packageDirPath -Optional | Out-Null
+Copy-DirectoryFiles $vtkBinDir "*.dll" $packageDirPath -Optional | Out-Null
 Copy-DirectoryFiles (Join-NativePath $pclRoot "3rdParty/FLANN/bin") "*.dll" $packageDirPath -Optional | Out-Null
 Copy-DirectoryFiles (Join-NativePath $pclRoot "3rdParty/Qhull/bin") "*.dll" $packageDirPath -Optional | Out-Null
 Copy-DirectoryFiles (Join-NativePath $pclRoot "3rdParty/Boost/lib") "*.dll" $packageDirPath -Optional | Out-Null
