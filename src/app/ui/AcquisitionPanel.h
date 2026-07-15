@@ -38,20 +38,33 @@ public:
     StereoCameraConfig stereoCameraConfig() const;
 
     /*
+        函数功能：从采集面板读取联动扫描配置
+        输入：
+            无
+        输出：
+            返回值：包含双相机采集参数、振镜串口参数和重标开关的联动配置
+    */
+    IntegratedScanConfig integratedScanConfig() const;
+
+    /*
         函数功能：设置采集面板忙碌状态
         输入：
             busy：是否正在执行采集任务
         输出：
-            无（函数会启用或禁用按钮）
+            无（函数会启用或禁用关键按钮）
     */
     void setBusy(bool busy);
 
     // 更新采集状态提示文本。
     void setStatusText(const QString& text);
+    // 更新工作流结果摘要。
+    void setResultSummary(const QString& text);
 
 signals:
     void refreshDevicesRequested();
     void captureRequested();
+    void autoCalibrationRequested();
+    void scanAndReconstructRequested();
 
 private:
     QComboBox* leftDeviceCombo_ = nullptr;
@@ -64,9 +77,28 @@ private:
     QCheckBox* hardwareTriggerCheck_ = nullptr;
     QSpinBox* triggerLineSpin_ = nullptr;
     QSpinBox* timeoutSpin_ = nullptr;
+
+    QLineEdit* galvoPortEdit_ = nullptr;
+    QSpinBox* galvoBaudRateSpin_ = nullptr;
+    QSpinBox* galvoCommandTimeoutSpin_ = nullptr;
+    QComboBox* galvoSyncModeCombo_ = nullptr;
+    QComboBox* galvoDirectionCombo_ = nullptr;
+    QSpinBox* galvoCaptureIntervalSpin_ = nullptr;
+    QSpinBox* galvoContinuousWaitSpin_ = nullptr;
+    QDoubleSpinBox* galvoStepAngleSpin_ = nullptr;
+    QSpinBox* galvoAutoRotationAngleSpin_ = nullptr;
+    QSpinBox* galvoForwardSpeedSpin_ = nullptr;
+    QSpinBox* galvoReverseSpeedSpin_ = nullptr;
+    QSpinBox* galvoLaserDutySpin_ = nullptr;
+    QDoubleSpinBox* galvoVoltageRangeSpin_ = nullptr;
+    QCheckBox* forceRecalibrationCheck_ = nullptr;
+
     QLineEdit* statusEdit_ = nullptr;
+    QLineEdit* summaryEdit_ = nullptr;
     QPushButton* refreshButton_ = nullptr;
     QPushButton* captureButton_ = nullptr;
+    QPushButton* autoCalibrationButton_ = nullptr;
+    QPushButton* scanReconstructButton_ = nullptr;
 };
 
 } // namespace htmsr::app

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/Types.h"
+
 #include <opencv2/core.hpp>
 
 #include <memory>
@@ -14,6 +16,18 @@ enum class CameraState {
     Connected,
     Streaming,
     Error
+};
+
+// 振镜与相机之间的时序关系，决定在线扫描时相机取流是跟随运动还是独立进行。
+enum class GalvoSyncMode {
+    Async,
+    Sync
+};
+
+// 扫描方向配置，对应协议中的正向转动和反向转动命令。
+enum class GalvoScanDirection {
+    Forward,
+    Reverse
 };
 
 // 一组同步的左右图像帧，既可来自离线目录，也可来自在线相机采集。
@@ -43,6 +57,31 @@ struct CameraParameterConfig {
     int grabTimeoutMs = 1000;
 };
 
+// 振镜扫描参数，覆盖协议中需要控制的同步、时序、电机、激光和电压能力。
+struct GalvoScanConfig {
+    std::string portName = "COM3";
+    int baudRate = 115200;
+    int commandTimeoutMs = 500;
+    GalvoSyncMode syncMode = GalvoSyncMode::Sync;
+    GalvoScanDirection direction = GalvoScanDirection::Forward;
+    int captureIntervalMs = 10;
+    int continuousCaptureWaitMs = 20;
+    double stepAngleDeg = 0.02;
+    int autoRotationAngleDeg = 22;
+    int forwardSpeedMs = 10;
+    int reverseSpeedMs = 10;
+    int laserDuty = 100;
+    double voltageRangeV = 7.0;
+};
+
+// 单条振镜命令执行结果，既保留原始发送帧，也保留可用于排查问题的返回内容。
+struct GalvoCommandResult {
+    bool success = false;
+    std::vector<unsigned char> request;
+    std::vector<unsigned char> response;
+    std::string message;
+};
+
 // 双相机采集任务配置，服务层根据该对象选择真实海康相机或 Mock 采集源。
 struct StereoCameraConfig {
     std::string leftDeviceId;
@@ -52,6 +91,18 @@ struct StereoCameraConfig {
     std::string outputDirectory = ".";
     CameraParameterConfig leftParameters;
     CameraParameterConfig rightParameters;
+};
+
+// 一键自动流程配置，统一承载相机、振镜、标定与重建所需的任务输入。
+struct IntegratedScanConfig {
+    StereoCameraConfig stereoCamera;
+    GalvoScanConfig galvo;
+    CalibrationInput calibrationInput;
+    std::string calibrationFile = "stereo_calibration.yml";
+    LaserExtractionConfig laserConfig;
+    ImageRange reconstructionRange;
+    double matchDistanceThreshold = 0.5;
+    bool forceRecalibration = false;
 };
 
 // 一次在线采集会话的保存结果，left/right 目录可直接作为离线重建输入。
@@ -65,6 +116,16 @@ struct AcquisitionSessionResult {
     cv::Mat lastRightPreview;
     int capturedFrameCount = 0;
     int failedFrameCount = 0;
+    bool success = false;
+    std::string message;
+};
+
+// 自动工作流执行结果，统一返回采集、标定、重建和标定复用情况。
+struct IntegratedWorkflowResult {
+    AcquisitionSessionResult acquisition;
+    CalibrationResult calibration;
+    ReconstructionResult reconstruction;
+    bool usedExistingCalibration = false;
     bool success = false;
     std::string message;
 };
@@ -105,5 +166,7 @@ using AcquisitionProviderPtr = std::unique_ptr<IAcquisitionProvider>;
         返回值：状态对应的字符串
 */
 std::string toString(CameraState state);
+std::string toString(GalvoSyncMode mode);
+std::string toString(GalvoScanDirection direction);
 
 } // namespace htmsr::app

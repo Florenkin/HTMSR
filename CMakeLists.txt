@@ -186,11 +186,14 @@ endif()
 set(HTMSR_APP_SOURCES
     src/app/main.cpp
     src/app/acquisition/AcquisitionTypes.cpp
+    src/app/acquisition/GalvoController.cpp
     src/app/acquisition/MockAcquisitionProvider.cpp
     src/app/acquisition/OfflineImageSequenceProvider.cpp
     src/app/acquisition/HikStereoCameraProvider.cpp
     src/app/services/AcquisitionService.cpp
     src/app/services/AppConfigService.cpp
+    src/app/services/IntegratedCalibrationCaptureService.cpp
+    src/app/services/IntegratedScanService.cpp
     src/app/services/QtLogSink.cpp
     src/app/ui/AcquisitionPanel.cpp
     src/app/ui/ImageViewWidget.cpp

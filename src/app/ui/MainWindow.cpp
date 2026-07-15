@@ -70,8 +70,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&calibrationWatcher_, &QFutureWatcher<CalibrationResult>::finished, this, &MainWindow::onCalibrationFinished);
     connect(&reconstructionWatcher_, &QFutureWatcher<ReconstructionResult>::finished, this, &MainWindow::onReconstructionFinished);
     connect(&acquisitionWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onAcquisitionFinished);
+    connect(&autoCalibrationWatcher_, &QFutureWatcher<IntegratedWorkflowResult>::finished, this, &MainWindow::onAutoCalibrationFinished);
+    connect(&scanWorkflowWatcher_, &QFutureWatcher<IntegratedWorkflowResult>::finished, this, &MainWindow::onScanAndReconstructFinished);
     connect(acquisitionPanel_, &AcquisitionPanel::refreshDevicesRequested, this, &MainWindow::refreshAcquisitionDevices);
     connect(acquisitionPanel_, &AcquisitionPanel::captureRequested, this, &MainWindow::runAcquisition);
+    connect(acquisitionPanel_, &AcquisitionPanel::autoCalibrationRequested, this, &MainWindow::runAutoCalibration);
+    connect(acquisitionPanel_, &AcquisitionPanel::scanAndReconstructRequested, this, &MainWindow::runScanAndReconstruct);
 
     refreshAcquisitionDevices();
     Logger::instance().info("App", "HTMSR started.");
@@ -91,6 +95,14 @@ MainWindow::~MainWindow()
     if (acquisitionWatcher_.isRunning()) {
         acquisitionWatcher_.cancel();
         acquisitionWatcher_.waitForFinished();
+    }
+    if (autoCalibrationWatcher_.isRunning()) {
+        autoCalibrationWatcher_.cancel();
+        autoCalibrationWatcher_.waitForFinished();
+    }
+    if (scanWorkflowWatcher_.isRunning()) {
+        scanWorkflowWatcher_.cancel();
+        scanWorkflowWatcher_.waitForFinished();
     }
 }
 
@@ -274,6 +286,57 @@ void MainWindow::runAcquisition()
     }));
 }
 
+void MainWindow::runAutoCalibration()
+{
+    if (autoCalibrationWatcher_.isRunning()) {
+        return;
+    }
+
+    IntegratedScanConfig config = acquisitionPanel_->integratedScanConfig();
+    config.calibrationInput = parameterPanel_->calibrationInput();
+    if (config.stereoCamera.outputDirectory.empty()) {
+        config.stereoCamera.outputDirectory = parameterPanel_->projectConfig().outputDirectory;
+    }
+
+    setBusy(true, QString::fromUtf8("自动标定中..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("自动标定中..."));
+    autoCalibrationWatcher_.setFuture(QtConcurrent::run([this, config]() {
+        return integratedCalibrationCaptureService_.run(config);
+    }));
+}
+
+void MainWindow::runScanAndReconstruct()
+{
+    if (scanWorkflowWatcher_.isRunning()) {
+        return;
+    }
+
+    IntegratedScanConfig config = acquisitionPanel_->integratedScanConfig();
+    config.calibrationInput = parameterPanel_->calibrationInput();
+    const auto projectConfig = parameterPanel_->projectConfig();
+    if (config.stereoCamera.outputDirectory.empty()) {
+        config.stereoCamera.outputDirectory = projectConfig.outputDirectory;
+    }
+
+    const ReconstructionInput reconstructionInput = parameterPanel_->reconstructionInput(CalibrationResult{});
+    config.laserConfig = reconstructionInput.laserConfig;
+    config.reconstructionRange = reconstructionInput.imageRange;
+    config.matchDistanceThreshold = reconstructionInput.matchDistanceThreshold;
+    config.calibrationFile = projectConfig.calibrationFile.empty()
+        ? config.calibrationInput.outputFile
+        : projectConfig.calibrationFile;
+
+    if (calibration_.isValid() && !config.calibrationFile.empty()) {
+        calibrationService_.saveCalibration(config.calibrationFile, calibration_);
+    }
+
+    setBusy(true, QString::fromUtf8("扫描重建中..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("扫描重建中..."));
+    scanWorkflowWatcher_.setFuture(QtConcurrent::run([this, config]() {
+        return integratedScanService_.runScanAndReconstruct(config);
+    }));
+}
+
 /*
     函数功能：处理后台标定任务完成后的 UI 更新
     输入：
@@ -349,6 +412,78 @@ void MainWindow::onAcquisitionFinished()
         Logger::instance().error("Acquisition", ex.what());
         acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
         QMessageBox::critical(this, QString::fromUtf8("采集失败"), QString::fromStdString(ex.what()));
+    }
+}
+
+void MainWindow::onAutoCalibrationFinished()
+{
+    setBusy(false, QString());
+    try {
+        autoCalibrationWorkflow_ = autoCalibrationWatcher_.result();
+        acquisition_ = autoCalibrationWorkflow_.acquisition;
+        acquisitionPanel_->setStatusText(QString::fromStdString(autoCalibrationWorkflow_.message));
+        acquisitionPanel_->setResultSummary(QString::fromUtf8("RMS: %1").arg(autoCalibrationWorkflow_.calibration.rms));
+        if (!acquisition_.lastLeftPreview.empty()) {
+            leftImageView_->setImage(acquisition_.lastLeftPreview);
+        }
+        if (!acquisition_.lastRightPreview.empty()) {
+            rightImageView_->setImage(acquisition_.lastRightPreview);
+        }
+        if (autoCalibrationWorkflow_.success) {
+            calibration_ = autoCalibrationWorkflow_.calibration;
+            parameterPanel_->setCalibrationDirectories(acquisition_.leftDirectory, acquisition_.rightDirectory);
+            refreshProjectTree();
+            QMessageBox::information(
+                this,
+                QString::fromUtf8("自动标定完成"),
+                QString::fromUtf8("标定完成，RMS: %1").arg(calibration_.rms));
+        } else {
+            QMessageBox::warning(this, QString::fromUtf8("自动标定失败"), QString::fromStdString(autoCalibrationWorkflow_.message));
+        }
+    } catch (const std::exception& ex) {
+        Logger::instance().error("IntegratedWorkflow", ex.what());
+        acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
+        QMessageBox::critical(this, QString::fromUtf8("自动标定失败"), QString::fromStdString(ex.what()));
+    }
+}
+
+void MainWindow::onScanAndReconstructFinished()
+{
+    setBusy(false, QString());
+    try {
+        scanWorkflow_ = scanWorkflowWatcher_.result();
+        acquisition_ = scanWorkflow_.acquisition;
+        acquisitionPanel_->setStatusText(QString::fromStdString(scanWorkflow_.message));
+        acquisitionPanel_->setResultSummary(
+            QString::fromUtf8("点云: %1 | 复用标定: %2")
+                .arg(static_cast<qulonglong>(scanWorkflow_.reconstruction.mergedPoints.size()))
+                .arg(scanWorkflow_.usedExistingCalibration ? QString::fromUtf8("是") : QString::fromUtf8("否")));
+        if (!acquisition_.lastLeftPreview.empty()) {
+            leftImageView_->setImage(acquisition_.lastLeftPreview);
+        }
+        if (!acquisition_.lastRightPreview.empty()) {
+            rightImageView_->setImage(acquisition_.lastRightPreview);
+        }
+        if (scanWorkflow_.success) {
+            reconstruction_ = scanWorkflow_.reconstruction;
+            calibration_ = scanWorkflow_.calibration;
+            pointCloudView_->setPoints(reconstruction_.mergedPoints);
+            if (!reconstruction_.frames.empty()) {
+                debugImageView_->setImage(reconstruction_.frames.front().leftLinePreview);
+            }
+            parameterPanel_->setReconstructionDirectories(acquisition_.leftDirectory, acquisition_.rightDirectory);
+            refreshProjectTree();
+            QMessageBox::information(
+                this,
+                QString::fromUtf8("扫描重建完成"),
+                QString::fromUtf8("点云数量: %1").arg(static_cast<qulonglong>(reconstruction_.mergedPoints.size())));
+        } else {
+            QMessageBox::warning(this, QString::fromUtf8("扫描重建失败"), QString::fromStdString(scanWorkflow_.message));
+        }
+    } catch (const std::exception& ex) {
+        Logger::instance().error("IntegratedWorkflow", ex.what());
+        acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
+        QMessageBox::critical(this, QString::fromUtf8("扫描重建失败"), QString::fromStdString(ex.what()));
     }
 }
 

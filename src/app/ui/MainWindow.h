@@ -2,6 +2,8 @@
 
 #include "app/services/AcquisitionService.h"
 #include "app/services/AppConfigService.h"
+#include "app/services/IntegratedCalibrationCaptureService.h"
+#include "app/services/IntegratedScanService.h"
 #include "app/services/QtLogSink.h"
 #include "core/CalibrationService.h"
 #include "core/PointCloudService.h"
@@ -52,12 +54,20 @@ private slots:
     void refreshAcquisitionDevices();
     // 执行在线采集保存任务。
     void runAcquisition();
+    // 执行一键自动标定任务。
+    void runAutoCalibration();
+    // 执行一键扫描重建任务。
+    void runScanAndReconstruct();
     // 标定后台任务结束后的 UI 回调。
     void onCalibrationFinished();
     // 重建后台任务结束后的 UI 回调。
     void onReconstructionFinished();
     // 在线采集后台任务结束后的 UI 回调。
     void onAcquisitionFinished();
+    // 一键自动标定后台任务结束后的 UI 回调。
+    void onAutoCalibrationFinished();
+    // 一键扫描重建后台任务结束后的 UI 回调。
+    void onScanAndReconstructFinished();
 
 private:
     // 构建顶部菜单栏。
@@ -77,6 +87,8 @@ private:
 
     AppConfigService configService_;
     AcquisitionService acquisitionService_;
+    IntegratedCalibrationCaptureService integratedCalibrationCaptureService_;
+    IntegratedScanService integratedScanService_;
     CalibrationService calibrationService_;
     ReconstructionService reconstructionService_;
     PointCloudService pointCloudService_;
@@ -95,9 +107,13 @@ private:
     CalibrationResult calibration_;
     ReconstructionResult reconstruction_;
     AcquisitionSessionResult acquisition_;
+    IntegratedWorkflowResult autoCalibrationWorkflow_;
+    IntegratedWorkflowResult scanWorkflow_;
     QFutureWatcher<CalibrationResult> calibrationWatcher_;
     QFutureWatcher<ReconstructionResult> reconstructionWatcher_;
     QFutureWatcher<AcquisitionSessionResult> acquisitionWatcher_;
+    QFutureWatcher<IntegratedWorkflowResult> autoCalibrationWatcher_;
+    QFutureWatcher<IntegratedWorkflowResult> scanWorkflowWatcher_;
 };
 
 } // namespace htmsr::app

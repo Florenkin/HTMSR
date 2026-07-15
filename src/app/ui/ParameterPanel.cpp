@@ -177,6 +177,12 @@ void ParameterPanel::setProjectConfig(const AppProjectConfig& config)
     removeEndpointCountSpin_->setValue(config.laserConfig.removeEndPointCount);
 }
 
+void ParameterPanel::setCalibrationDirectories(const std::string& leftDirectory, const std::string& rightDirectory)
+{
+    leftCalibrationEdit_->setText(QString::fromStdString(leftDirectory));
+    rightCalibrationEdit_->setText(QString::fromStdString(rightDirectory));
+}
+
 void ParameterPanel::setReconstructionDirectories(const std::string& leftDirectory, const std::string& rightDirectory)
 {
     leftReconstructionEdit_->setText(QString::fromStdString(leftDirectory));

@@ -29,6 +29,16 @@ public:
     void setProjectConfig(const AppProjectConfig& config);
 
     /*
+        函数功能：将采集得到的左右标定目录写入标定输入目录
+        输入：
+            leftDirectory：左标定图像保存目录
+            rightDirectory：右标定图像保存目录
+        输出：
+            无（函数会更新标定目录输入框）
+    */
+    void setCalibrationDirectories(const std::string& leftDirectory, const std::string& rightDirectory);
+
+    /*
         函数功能：将采集会话输出的左右目录写入重建输入目录
         输入：
             leftDirectory：左图像保存目录
