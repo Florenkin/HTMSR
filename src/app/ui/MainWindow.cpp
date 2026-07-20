@@ -70,12 +70,18 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&calibrationWatcher_, &QFutureWatcher<CalibrationResult>::finished, this, &MainWindow::onCalibrationFinished);
     connect(&reconstructionWatcher_, &QFutureWatcher<ReconstructionResult>::finished, this, &MainWindow::onReconstructionFinished);
     connect(&acquisitionWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onAcquisitionFinished);
+    connect(&calibrationCaptureStartWatcher_, &QFutureWatcher<CalibrationCaptureSessionState>::finished, this, &MainWindow::onCalibrationCaptureStarted);
+    connect(&calibrationFrameWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onCalibrationFrameCaptured);
+    connect(&reconstructionCaptureWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onReconstructionCaptureFinished);
     connect(&autoCalibrationWatcher_, &QFutureWatcher<IntegratedWorkflowResult>::finished, this, &MainWindow::onAutoCalibrationFinished);
     connect(&scanWorkflowWatcher_, &QFutureWatcher<IntegratedWorkflowResult>::finished, this, &MainWindow::onScanAndReconstructFinished);
     connect(acquisitionPanel_, &AcquisitionPanel::refreshDevicesRequested, this, &MainWindow::refreshAcquisitionDevices);
-    connect(acquisitionPanel_, &AcquisitionPanel::captureRequested, this, &MainWindow::runAcquisition);
-    connect(acquisitionPanel_, &AcquisitionPanel::autoCalibrationRequested, this, &MainWindow::runAutoCalibration);
-    connect(acquisitionPanel_, &AcquisitionPanel::scanAndReconstructRequested, this, &MainWindow::runScanAndReconstruct);
+    connect(acquisitionPanel_, &AcquisitionPanel::startCalibrationCaptureRequested, this, &MainWindow::startCalibrationCapture);
+    connect(acquisitionPanel_, &AcquisitionPanel::captureCalibrationFrameRequested, this, &MainWindow::captureCalibrationFrame);
+    connect(acquisitionPanel_, &AcquisitionPanel::calibrateCapturedFramesRequested, this, &MainWindow::calibrateCapturedFrames);
+    connect(acquisitionPanel_, &AcquisitionPanel::finishCalibrationCaptureRequested, this, &MainWindow::finishCalibrationCapture);
+    connect(acquisitionPanel_, &AcquisitionPanel::startReconstructionCaptureRequested, this, &MainWindow::startReconstructionCapture);
+    connect(acquisitionPanel_, &AcquisitionPanel::reconstructCapturedFramesRequested, this, &MainWindow::reconstructCapturedFrames);
 
     refreshAcquisitionDevices();
     Logger::instance().info("App", "HTMSR started.");
@@ -96,6 +102,18 @@ MainWindow::~MainWindow()
         acquisitionWatcher_.cancel();
         acquisitionWatcher_.waitForFinished();
     }
+    if (calibrationCaptureStartWatcher_.isRunning()) {
+        calibrationCaptureStartWatcher_.cancel();
+        calibrationCaptureStartWatcher_.waitForFinished();
+    }
+    if (calibrationFrameWatcher_.isRunning()) {
+        calibrationFrameWatcher_.cancel();
+        calibrationFrameWatcher_.waitForFinished();
+    }
+    if (reconstructionCaptureWatcher_.isRunning()) {
+        reconstructionCaptureWatcher_.cancel();
+        reconstructionCaptureWatcher_.waitForFinished();
+    }
     if (autoCalibrationWatcher_.isRunning()) {
         autoCalibrationWatcher_.cancel();
         autoCalibrationWatcher_.waitForFinished();
@@ -104,6 +122,7 @@ MainWindow::~MainWindow()
         scanWorkflowWatcher_.cancel();
         scanWorkflowWatcher_.waitForFinished();
     }
+    calibrationCaptureSessionService_.finish();
 }
 
 /*
@@ -173,6 +192,7 @@ void MainWindow::runReconstruction()
     }
 
     const ReconstructionInput input = parameterPanel_->reconstructionInput(calibration_);
+    autoExportReconstructionOnFinish_ = false;
     setBusy(true, QString::fromUtf8("重建中..."));
     reconstructionWatcher_.setFuture(QtConcurrent::run([input]() {
         ReconstructionService service;
@@ -337,6 +357,129 @@ void MainWindow::runScanAndReconstruct()
     }));
 }
 
+void MainWindow::startCalibrationCapture()
+{
+    if (calibrationCaptureStartWatcher_.isRunning() || calibrationCaptureSessionService_.isActive()) {
+        return;
+    }
+
+    StereoCameraConfig config = acquisitionPanel_->stereoCameraConfig();
+    if (config.outputDirectory.empty()) {
+        config.outputDirectory = parameterPanel_->projectConfig().outputDirectory;
+    }
+
+    setBusy(true, QString::fromUtf8("开始标定采集中..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("正在连接相机并创建标定采集会话..."));
+    calibrationCaptureStartWatcher_.setFuture(QtConcurrent::run([this, config]() {
+        return calibrationCaptureSessionService_.start(config);
+    }));
+}
+
+void MainWindow::captureCalibrationFrame()
+{
+    if (calibrationFrameWatcher_.isRunning() || !calibrationCaptureSessionService_.isActive()) {
+        return;
+    }
+
+    setBusy(true, QString::fromUtf8("采集当前标定帧..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("正在采集当前标定帧..."));
+    calibrationFrameWatcher_.setFuture(QtConcurrent::run([this]() {
+        return calibrationCaptureSessionService_.captureCurrentFrame();
+    }));
+}
+
+void MainWindow::calibrateCapturedFrames()
+{
+    if (calibrationWatcher_.isRunning()) {
+        return;
+    }
+
+    calibrationCapture_ = calibrationCaptureSessionService_.currentResult();
+    if (calibrationCapture_.capturedFrameCount <= 0) {
+        QMessageBox::warning(this, QString::fromUtf8("缺少标定帧"), QString::fromUtf8("请先采集至少一组左右标定图像。"));
+        return;
+    }
+    if (calibrationCapture_.capturedFrameCount < 6) {
+        const auto reply = QMessageBox::question(
+            this,
+            QString::fromUtf8("标定帧较少"),
+            QString::fromUtf8("当前只采集了 %1 帧，标定精度可能不足。是否继续？").arg(calibrationCapture_.capturedFrameCount));
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    CalibrationInput input = parameterPanel_->calibrationInput();
+    input.leftDirectory = calibrationCapture_.leftDirectory;
+    input.rightDirectory = calibrationCapture_.rightDirectory;
+    setBusy(true, QString::fromUtf8("标定当前采集帧..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("正在标定当前采集帧..."));
+    calibrationWatcher_.setFuture(QtConcurrent::run([input]() {
+        CalibrationService service;
+        return service.calibrate(input);
+    }));
+}
+
+void MainWindow::finishCalibrationCapture()
+{
+    calibrationCaptureSessionService_.finish();
+    calibrationCapture_ = calibrationCaptureSessionService_.currentResult();
+    acquisitionPanel_->setCalibrationCaptureState(false, calibrationCapture_.capturedFrameCount);
+    acquisitionPanel_->setStatusText(QString::fromUtf8("标定采集已结束，已采集 %1 帧。").arg(calibrationCapture_.capturedFrameCount));
+}
+
+void MainWindow::startReconstructionCapture()
+{
+    if (reconstructionCaptureWatcher_.isRunning()) {
+        return;
+    }
+
+    IntegratedScanConfig config = acquisitionPanel_->integratedScanConfig();
+    const auto projectConfig = parameterPanel_->projectConfig();
+    if (config.stereoCamera.outputDirectory.empty()) {
+        config.stereoCamera.outputDirectory = projectConfig.outputDirectory;
+    }
+
+    setBusy(true, QString::fromUtf8("重建采集中..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("正在采集重建图像序列..."));
+    acquisitionPanel_->setReconstructionCaptureReady(false);
+    reconstructionCaptureWatcher_.setFuture(QtConcurrent::run([this, config]() {
+        return reconstructionCaptureSessionService_.capture(config);
+    }));
+}
+
+void MainWindow::reconstructCapturedFrames()
+{
+    if (reconstructionWatcher_.isRunning()) {
+        return;
+    }
+
+    if (reconstructionCapture_.capturedFrameCount <= 0) {
+        QMessageBox::warning(this, QString::fromUtf8("缺少重建帧"), QString::fromUtf8("请先执行开始重建采集。"));
+        return;
+    }
+
+    if (!calibration_.isValid()) {
+        const auto file = parameterPanel_->projectConfig().calibrationFile;
+        calibrationService_.loadCalibration(file, calibration_);
+    }
+    if (!calibration_.isValid()) {
+        QMessageBox::warning(this, QString::fromUtf8("缺少标定"), QString::fromUtf8("请先完成标定或加载有效标定文件。"));
+        return;
+    }
+
+    ReconstructionInput input = parameterPanel_->reconstructionInput(calibration_);
+    input.leftDirectory = reconstructionCapture_.leftDirectory;
+    input.rightDirectory = reconstructionCapture_.rightDirectory;
+    autoExportReconstructionOnFinish_ = true;
+    setBusy(true, QString::fromUtf8("重建当前采集帧..."));
+    acquisitionPanel_->setStatusText(QString::fromUtf8("正在重建当前采集帧..."));
+    reconstructionWatcher_.setFuture(QtConcurrent::run([input]() {
+        ReconstructionService service;
+        return service.reconstruct(input);
+    }));
+}
+
 /*
     函数功能：处理后台标定任务完成后的 UI 更新
     输入：
@@ -349,6 +492,13 @@ void MainWindow::onCalibrationFinished()
     setBusy(false, QString());
     try {
         calibration_ = calibrationWatcher_.result();
+        if (!calibrationCapture_.leftDirectory.empty() && !calibrationCapture_.rightDirectory.empty()) {
+            parameterPanel_->setCalibrationDirectories(calibrationCapture_.leftDirectory, calibrationCapture_.rightDirectory);
+            acquisitionPanel_->setResultSummary(QString::fromUtf8("RMS: %1 | 标定帧: %2")
+                .arg(calibration_.rms)
+                .arg(calibrationCapture_.capturedFrameCount));
+            refreshProjectTree();
+        }
         QMessageBox::information(this, QString::fromUtf8("标定完成"), QString::fromUtf8("双目标定完成。RMS: %1").arg(calibration_.rms));
     } catch (const std::exception& ex) {
         Logger::instance().error("Calibration", ex.what());
@@ -368,6 +518,13 @@ void MainWindow::onReconstructionFinished()
     setBusy(false, QString());
     try {
         reconstruction_ = reconstructionWatcher_.result();
+        if (autoExportReconstructionOnFinish_ && !reconstruction_.mergedPoints.empty()) {
+            reconstruction_.txtPath = outputPath("point_cloud.txt").toStdString();
+            reconstruction_.pcdPath = outputPath("point_cloud.pcd").toStdString();
+            pointCloudService_.saveTxt(reconstruction_.txtPath, reconstruction_.mergedPoints);
+            pointCloudService_.savePcd(reconstruction_.pcdPath, reconstruction_.mergedPoints);
+            autoExportReconstructionOnFinish_ = false;
+        }
         pointCloudView_->setPoints(reconstruction_.mergedPoints);
         if (!reconstruction_.frames.empty()) {
             leftImageView_->setImage(reconstruction_.frames.front().leftLinePreview);
@@ -377,6 +534,7 @@ void MainWindow::onReconstructionFinished()
         refreshProjectTree();
         QMessageBox::information(this, QString::fromUtf8("重建完成"), QString::fromUtf8("点云数量: %1").arg(static_cast<qulonglong>(reconstruction_.mergedPoints.size())));
     } catch (const std::exception& ex) {
+        autoExportReconstructionOnFinish_ = false;
         Logger::instance().error("Reconstruction", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromStdString(ex.what()));
     }
@@ -412,6 +570,83 @@ void MainWindow::onAcquisitionFinished()
         Logger::instance().error("Acquisition", ex.what());
         acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
         QMessageBox::critical(this, QString::fromUtf8("采集失败"), QString::fromStdString(ex.what()));
+    }
+}
+
+void MainWindow::onCalibrationCaptureStarted()
+{
+    setBusy(false, QString());
+    try {
+        const auto state = calibrationCaptureStartWatcher_.result();
+        calibrationCapture_ = state.acquisition;
+        acquisition_ = calibrationCapture_;
+        acquisitionPanel_->setCalibrationCaptureState(state.active, calibrationCapture_.capturedFrameCount);
+        acquisitionPanel_->setStatusText(QString::fromStdString(calibrationCapture_.message));
+        acquisitionPanel_->setResultSummary(QString::fromUtf8("标定采集帧: %1").arg(calibrationCapture_.capturedFrameCount));
+        refreshProjectTree();
+    } catch (const std::exception& ex) {
+        calibrationCaptureSessionService_.finish();
+        acquisitionPanel_->setCalibrationCaptureState(false, 0);
+        acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
+        Logger::instance().error("CalibrationCapture", ex.what());
+        QMessageBox::critical(this, QString::fromUtf8("开始标定采集失败"), QString::fromStdString(ex.what()));
+    }
+}
+
+void MainWindow::onCalibrationFrameCaptured()
+{
+    setBusy(false, QString());
+    try {
+        calibrationCapture_ = calibrationFrameWatcher_.result();
+        acquisition_ = calibrationCapture_;
+        acquisitionPanel_->setCalibrationCaptureState(calibrationCaptureSessionService_.isActive(), calibrationCapture_.capturedFrameCount);
+        acquisitionPanel_->setStatusText(QString::fromStdString(calibrationCapture_.message));
+        acquisitionPanel_->setResultSummary(QString::fromUtf8("标定采集帧: %1").arg(calibrationCapture_.capturedFrameCount));
+        if (!calibrationCapture_.lastLeftPreview.empty()) {
+            leftImageView_->setImage(calibrationCapture_.lastLeftPreview);
+        }
+        if (!calibrationCapture_.lastRightPreview.empty()) {
+            rightImageView_->setImage(calibrationCapture_.lastRightPreview);
+        }
+        parameterPanel_->setCalibrationDirectories(calibrationCapture_.leftDirectory, calibrationCapture_.rightDirectory);
+        refreshProjectTree();
+    } catch (const std::exception& ex) {
+        acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
+        Logger::instance().error("CalibrationCapture", ex.what());
+        QMessageBox::critical(this, QString::fromUtf8("采集当前帧失败"), QString::fromStdString(ex.what()));
+    }
+}
+
+void MainWindow::onReconstructionCaptureFinished()
+{
+    setBusy(false, QString());
+    try {
+        reconstructionCapture_ = reconstructionCaptureWatcher_.result();
+        acquisition_ = reconstructionCapture_;
+        acquisitionPanel_->setStatusText(QString::fromStdString(reconstructionCapture_.message));
+        acquisitionPanel_->setResultSummary(QString::fromUtf8("重建采集帧: %1").arg(reconstructionCapture_.capturedFrameCount));
+        acquisitionPanel_->setReconstructionCaptureReady(reconstructionCapture_.success);
+        if (!reconstructionCapture_.lastLeftPreview.empty()) {
+            leftImageView_->setImage(reconstructionCapture_.lastLeftPreview);
+        }
+        if (!reconstructionCapture_.lastRightPreview.empty()) {
+            rightImageView_->setImage(reconstructionCapture_.lastRightPreview);
+        }
+        if (reconstructionCapture_.success) {
+            parameterPanel_->setReconstructionDirectories(reconstructionCapture_.leftDirectory, reconstructionCapture_.rightDirectory);
+            refreshProjectTree();
+            QMessageBox::information(
+                this,
+                QString::fromUtf8("重建采集完成"),
+                QString::fromUtf8("重建采集完成，成功帧数: %1").arg(reconstructionCapture_.capturedFrameCount));
+        } else {
+            QMessageBox::warning(this, QString::fromUtf8("重建采集无有效帧"), QString::fromStdString(reconstructionCapture_.message));
+        }
+    } catch (const std::exception& ex) {
+        acquisitionPanel_->setReconstructionCaptureReady(false);
+        acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
+        Logger::instance().error("ReconstructionCapture", ex.what());
+        QMessageBox::critical(this, QString::fromUtf8("重建采集失败"), QString::fromStdString(ex.what()));
     }
 }
 
@@ -498,10 +733,9 @@ void MainWindow::buildMenus()
 
     auto* scanMenu = menuBar()->addMenu(QString::fromUtf8("扫描"));
     scanMenu->addAction(QString::fromUtf8("刷新相机"), this, &MainWindow::refreshAcquisitionDevices);
-    scanMenu->addAction(QString::fromUtf8("在线采集"), this, &MainWindow::runAcquisition);
     scanMenu->addSeparator();
-    scanMenu->addAction(QString::fromUtf8("双目标定"), this, &MainWindow::runCalibration);
-    scanMenu->addAction(QString::fromUtf8("三维重建"), this, &MainWindow::runReconstruction);
+    scanMenu->addAction(QString::fromUtf8("离线双目标定"), this, &MainWindow::runCalibration);
+    scanMenu->addAction(QString::fromUtf8("离线三维重建"), this, &MainWindow::runReconstruction);
 
     auto* viewMenu = menuBar()->addMenu(QString::fromUtf8("显示"));
     viewMenu->addAction(QString::fromUtf8("清空点云"), pointCloudView_, &PointCloudViewWidget::clear);
@@ -518,12 +752,11 @@ void MainWindow::buildToolBar()
     toolbar->addAction(style()->standardIcon(QStyle::SP_DialogSaveButton), QString::fromUtf8("保存"), this, &MainWindow::saveProjectSettings);
     toolbar->addAction(style()->standardIcon(QStyle::SP_DirOpenIcon), QString::fromUtf8("加载标定"), this, &MainWindow::loadCalibration);
     toolbar->addAction(style()->standardIcon(QStyle::SP_BrowserReload), QString::fromUtf8("刷新相机"), this, &MainWindow::refreshAcquisitionDevices);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_MediaPlay), QString::fromUtf8("采集"), this, &MainWindow::runAcquisition);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_MediaPlay), QString::fromUtf8("标定"), this, &MainWindow::runCalibration);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_ComputerIcon), QString::fromUtf8("重建"), this, &MainWindow::runReconstruction);
+    toolbar->addAction(style()->standardIcon(QStyle::SP_MediaPlay), QString::fromUtf8("离线标定"), this, &MainWindow::runCalibration);
+    toolbar->addAction(style()->standardIcon(QStyle::SP_ComputerIcon), QString::fromUtf8("离线重建"), this, &MainWindow::runReconstruction);
     toolbar->addSeparator();
-    toolbar->addAction(style()->standardIcon(QStyle::SP_FileDialogDetailedView), QString::fromUtf8("TXT"), this, &MainWindow::exportTxt);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_DriveHDIcon), QString::fromUtf8("PCD"), this, &MainWindow::exportPcd);
+    toolbar->addAction(style()->standardIcon(QStyle::SP_FileDialogDetailedView), QString::fromUtf8("导出TXT"), this, &MainWindow::exportTxt);
+    toolbar->addAction(style()->standardIcon(QStyle::SP_DriveHDIcon), QString::fromUtf8("导出PCD"), this, &MainWindow::exportPcd);
 }
 
 // Dock 区域包括资源树、参数面板、采集面板和日志面板，构成主界面的工作区骨架。

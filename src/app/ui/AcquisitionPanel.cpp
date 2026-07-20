@@ -120,6 +120,11 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     galvoContinuousWaitSpin_->setRange(1, 255);
     galvoContinuousWaitSpin_->setValue(20);
 
+    galvoTotalRotationAngleSpin_ = new QDoubleSpinBox;
+    galvoTotalRotationAngleSpin_->setRange(0.01, 650.25);
+    galvoTotalRotationAngleSpin_->setDecimals(4);
+    galvoTotalRotationAngleSpin_->setValue(22.0);
+
     galvoStepAngleSpin_ = new QDoubleSpinBox;
     galvoStepAngleSpin_->setRange(0.01, 650.25);
     galvoStepAngleSpin_->setDecimals(4);
@@ -156,6 +161,7 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     galvoForm->addRow(QString::fromUtf8("扫描方向"), galvoDirectionCombo_);
     galvoForm->addRow(QString::fromUtf8("抓图间隔 ms"), galvoCaptureIntervalSpin_);
     galvoForm->addRow(QString::fromUtf8("连续模式等待 ms"), galvoContinuousWaitSpin_);
+    galvoForm->addRow(QString::fromUtf8("总旋转角度 °"), galvoTotalRotationAngleSpin_);
     galvoForm->addRow(QString::fromUtf8("步进角度 °"), galvoStepAngleSpin_);
     galvoForm->addRow(QString::fromUtf8("自动旋转角度 °"), galvoAutoRotationAngleSpin_);
     galvoForm->addRow(QString::fromUtf8("正向速度 ms"), galvoForwardSpeedSpin_);
@@ -170,15 +176,25 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     summaryEdit_->setReadOnly(true);
 
     refreshButton_ = new QPushButton(QString::fromUtf8("刷新设备"));
-    captureButton_ = new QPushButton(QString::fromUtf8("采集保存"));
-    autoCalibrationButton_ = new QPushButton(QString::fromUtf8("一键自动标定"));
-    scanReconstructButton_ = new QPushButton(QString::fromUtf8("一键扫描重建"));
+    startCalibrationCaptureButton_ = new QPushButton(QString::fromUtf8("开始标定采集"));
+    captureCalibrationFrameButton_ = new QPushButton(QString::fromUtf8("采集当前帧"));
+    calibrateCapturedFramesButton_ = new QPushButton(QString::fromUtf8("标定当前采集帧"));
+    finishCalibrationCaptureButton_ = new QPushButton(QString::fromUtf8("结束标定采集"));
+    startReconstructionCaptureButton_ = new QPushButton(QString::fromUtf8("开始重建采集"));
+    reconstructCapturedFramesButton_ = new QPushButton(QString::fromUtf8("重建当前采集帧"));
 
     auto* buttonLayout = new QHBoxLayout;
     buttonLayout->addWidget(refreshButton_);
-    buttonLayout->addWidget(captureButton_);
-    buttonLayout->addWidget(autoCalibrationButton_);
-    buttonLayout->addWidget(scanReconstructButton_);
+
+    auto* calibrationButtonLayout = new QHBoxLayout;
+    calibrationButtonLayout->addWidget(startCalibrationCaptureButton_);
+    calibrationButtonLayout->addWidget(captureCalibrationFrameButton_);
+    calibrationButtonLayout->addWidget(calibrateCapturedFramesButton_);
+    calibrationButtonLayout->addWidget(finishCalibrationCaptureButton_);
+
+    auto* reconstructionButtonLayout = new QHBoxLayout;
+    reconstructionButtonLayout->addWidget(startReconstructionCaptureButton_);
+    reconstructionButtonLayout->addWidget(reconstructCapturedFramesButton_);
 
     auto* statusGroup = new QGroupBox(QString::fromUtf8("任务状态"));
     auto* statusForm = new QFormLayout(statusGroup);
@@ -190,18 +206,24 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     root->addWidget(galvoGroup);
     root->addWidget(statusGroup);
     root->addLayout(buttonLayout);
+    root->addLayout(calibrationButtonLayout);
+    root->addLayout(reconstructionButtonLayout);
     root->addStretch();
 
     connect(refreshButton_, &QPushButton::clicked, this, &AcquisitionPanel::refreshDevicesRequested);
-    connect(captureButton_, &QPushButton::clicked, this, &AcquisitionPanel::captureRequested);
-    connect(autoCalibrationButton_, &QPushButton::clicked, this, &AcquisitionPanel::autoCalibrationRequested);
-    connect(scanReconstructButton_, &QPushButton::clicked, this, &AcquisitionPanel::scanAndReconstructRequested);
+    connect(startCalibrationCaptureButton_, &QPushButton::clicked, this, &AcquisitionPanel::startCalibrationCaptureRequested);
+    connect(captureCalibrationFrameButton_, &QPushButton::clicked, this, &AcquisitionPanel::captureCalibrationFrameRequested);
+    connect(calibrateCapturedFramesButton_, &QPushButton::clicked, this, &AcquisitionPanel::calibrateCapturedFramesRequested);
+    connect(finishCalibrationCaptureButton_, &QPushButton::clicked, this, &AcquisitionPanel::finishCalibrationCaptureRequested);
+    connect(startReconstructionCaptureButton_, &QPushButton::clicked, this, &AcquisitionPanel::startReconstructionCaptureRequested);
+    connect(reconstructCapturedFramesButton_, &QPushButton::clicked, this, &AcquisitionPanel::reconstructCapturedFramesRequested);
     connect(outputDirectoryButton, &QPushButton::clicked, this, [this]() {
         const QString directory = QFileDialog::getExistingDirectory(this, QString::fromUtf8("选择采集输出目录"), outputDirectoryEdit_->text());
         if (!directory.isEmpty()) {
             outputDirectoryEdit_->setText(directory);
         }
     });
+    updateActionButtons();
 }
 
 /*
@@ -228,7 +250,7 @@ void AcquisitionPanel::setDevices(const std::vector<CameraDeviceInfo>& devices)
     }
 
     setStatusText(devices.empty()
-        ? QString::fromUtf8("未枚举到真实相机，可使用采集保存调试")
+        ? QString::fromUtf8("未枚举到真实相机，可勾选模拟采集进行会话流程测试")
         : QString::fromUtf8("已枚举到 %1 台相机").arg(static_cast<qulonglong>(devices.size())));
 }
 
@@ -271,6 +293,7 @@ IntegratedScanConfig AcquisitionPanel::integratedScanConfig() const
 {
     IntegratedScanConfig config;
     config.stereoCamera = stereoCameraConfig();
+    config.totalRotationAngleDeg = galvoTotalRotationAngleSpin_->value();
     config.galvo.portName = galvoPortEdit_->text().toStdString();
     config.galvo.baudRate = galvoBaudRateSpin_->value();
     config.galvo.commandTimeoutMs = galvoCommandTimeoutSpin_->value();
@@ -297,10 +320,8 @@ IntegratedScanConfig AcquisitionPanel::integratedScanConfig() const
 */
 void AcquisitionPanel::setBusy(bool busy)
 {
-    refreshButton_->setEnabled(!busy);
-    captureButton_->setEnabled(!busy);
-    autoCalibrationButton_->setEnabled(!busy);
-    scanReconstructButton_->setEnabled(!busy);
+    busy_ = busy;
+    updateActionButtons();
 }
 
 // 状态文本统一走只读输入框显示，便于向用户反馈当前枚举和采集结果。
@@ -313,6 +334,33 @@ void AcquisitionPanel::setStatusText(const QString& text)
 void AcquisitionPanel::setResultSummary(const QString& text)
 {
     summaryEdit_->setText(text);
+}
+
+void AcquisitionPanel::setCalibrationCaptureState(bool active, int capturedFrameCount)
+{
+    calibrationCaptureActive_ = active;
+    calibrationCapturedFrameCount_ = capturedFrameCount;
+    updateActionButtons();
+}
+
+void AcquisitionPanel::setReconstructionCaptureReady(bool ready)
+{
+    reconstructionCaptureReady_ = ready;
+    updateActionButtons();
+}
+
+void AcquisitionPanel::updateActionButtons()
+{
+    const bool idle = !busy_;
+    refreshButton_->setEnabled(idle && !calibrationCaptureActive_);
+
+    startCalibrationCaptureButton_->setEnabled(idle && !calibrationCaptureActive_);
+    captureCalibrationFrameButton_->setEnabled(idle && calibrationCaptureActive_);
+    calibrateCapturedFramesButton_->setEnabled(idle && calibrationCapturedFrameCount_ > 0);
+    finishCalibrationCaptureButton_->setEnabled(idle && calibrationCaptureActive_);
+
+    startReconstructionCaptureButton_->setEnabled(idle && !calibrationCaptureActive_);
+    reconstructCapturedFramesButton_->setEnabled(idle && reconstructionCaptureReady_);
 }
 
 } // namespace htmsr::app

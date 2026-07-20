@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
+import argparse
 import json
-import math
 import textwrap
 import zipfile
 from dataclasses import dataclass, field
@@ -45,6 +45,15 @@ def nid(prefix: str = "id") -> str:
 
 def n(title: str, children: Iterable[Node] | None = None, notes: str = "") -> Node:
     return Node(title=title, children=list(children or []), notes=notes)
+
+
+def configure_output_paths(docs_dir: Path) -> None:
+    global DOCS, PROJECT_XMIND, PROJECT_PNG, RECON_XMIND, RECON_PNG
+    DOCS = docs_dir
+    PROJECT_XMIND = DOCS / "HTMSR 项目结构图.xmind"
+    PROJECT_PNG = DOCS / "HTMSR 项目结构图.png"
+    RECON_XMIND = DOCS / "双目激光三维重建流程.xmind"
+    RECON_PNG = DOCS / "双目激光三维重建流程.png"
 
 
 def xmind_topic(node: Node) -> dict:
@@ -222,13 +231,13 @@ def project_structure_sheets() -> list[tuple[str, Node]]:
             ]),
             n("源码分层", [
                 n("src/core: 纯 C++ 业务核心"),
-                n("src/app/services: Qt 应用服务"),
+                n("src/app/services: Qt 应用服务与自动流程"),
                 n("src/app/ui: Qt Widgets 界面"),
-                n("src/app/acquisition: 离线/在线采集抽象"),
+                n("src/app/acquisition: 采集设备与振镜联动"),
             ]),
             n("发布输出", [
-                n("out/package/HTMSR_debug: Debug 包，保留 VTK 点云视图"),
-                n("out/package/HTMSR_release: Release 包，稳定优先，默认占位点云视图"),
+                n("out/package/HTMSR_debug: Debug 包，可启用 VTK 点云视图"),
+                n("out/package/HTMSR_release: Release 包，默认关闭 VTK Viewer 保稳定"),
             ]),
         ])),
         ("02 core 业务核心", n("src/core", [
@@ -236,6 +245,7 @@ def project_structure_sheets() -> list[tuple[str, Node]]:
                 n("CalibrationInput / CalibrationResult"),
                 n("LaserExtractionConfig / LaserExtractionResult"),
                 n("ReconstructionInput / ReconstructionResult"),
+                n("FrameReconstructionDiagnostics"),
                 n("AppProjectConfig / LogMessage"),
             ]),
             n("CalibrationService", [
@@ -276,6 +286,8 @@ def project_structure_sheets() -> list[tuple[str, Node]]:
                 n("AppConfigService: QSettings 配置持久化"),
                 n("QtLogSink: Logger 转 Qt signal"),
                 n("AcquisitionService: 采集 Session、保存 left/right"),
+                n("IntegratedCalibrationCaptureService: 采集棋盘格并自动标定"),
+                n("IntegratedScanService: 振镜 + 双相机 + 重建闭环"),
             ]),
             n("acquisition", [
                 n("ICameraDevice: 相机设备抽象"),
@@ -284,6 +296,7 @@ def project_structure_sheets() -> list[tuple[str, Node]]:
                 n("OfflineImageSequenceProvider: 离线图片序列"),
                 n("HikCameraDevice: 海康 SDK 适配边界"),
                 n("HikStereoCameraProvider: 双海康相机 Provider"),
+                n("GalvoController: 串口振镜协议控制"),
             ]),
         ])),
         ("04 依赖与开关", n("第三方依赖与构建开关", [
@@ -300,13 +313,14 @@ def project_structure_sheets() -> list[tuple[str, Node]]:
                 n("PCL visualization + VTK Qt: 可选内嵌点云视图"),
             ]),
             n("海康 MVS SDK", [
-                n("HTMSR_ENABLE_HIK_CAMERA=ON/OFF"),
+                n("CMakeLists 默认 OFF，公共/本机 preset 可 ON"),
+                n("HTMSR_ENABLE_HIK_CAMERA=ON 才能接真实相机"),
                 n("MvCameraControl.h / MvCameraControl.lib"),
                 n("Runtime DLL/CTI/INI 复制到发布目录"),
             ]),
             n("发布策略", [
                 n("Debug: HTMSR_ENABLE_VTK_VIEWER=ON，开发机点云交互"),
-                n("Release: HTMSR_ENABLE_VTK_VIEWER=OFF，避免 Debug VTK/Qt 混入"),
+                n("Release 打包: 强制 HTMSR_ENABLE_VTK_VIEWER=OFF"),
                 n("脚本检查并清理 Debug DLL"),
             ]),
         ])),
@@ -324,9 +338,15 @@ def reconstruction_sheets() -> list[tuple[str, Node]]:
             n("在线采集闭环", [
                 n("AcquisitionPanel 配置左右相机/模拟采集"),
                 n("AcquisitionService 创建 capture Session"),
-                n("保存 output/capture/<session>/left"),
-                n("保存 output/capture/<session>/right"),
+                n("保存 outputDirectory/capture_yyyyMMdd_HHmmss/left"),
+                n("保存 outputDirectory/capture_yyyyMMdd_HHmmss/right"),
                 n("自动回填重建目录，复用离线重建流程"),
+            ]),
+            n("一键扫描输入", [
+                n("必须启用海康编译并关闭 Mock"),
+                n("必须已有有效 stereo_calibration.yml"),
+                n("振镜串口参数 + 相机曝光/增益/触发"),
+                n("保存 outputDirectory/scan_yyyyMMdd_HHmmss/left|right"),
             ]),
             n("标定与参数", [
                 n("stereo_calibration.yml"),
@@ -361,7 +381,7 @@ def reconstruction_sheets() -> list[tuple[str, Node]]:
             n("中心线提取", [
                 n("LaserExtractionService::extract 左图"),
                 n("LaserExtractionService::extract 右图"),
-                n("失败或空中心线: 返回空点集并记录日志"),
+                n("空线记录 left_empty/right_empty/both_empty"),
             ]),
             n("去畸变与射线", [
                 n("cv::undistortPoints"),
@@ -377,6 +397,7 @@ def reconstruction_sheets() -> list[tuple[str, Node]]:
                 n("closestPointBetweenLines"),
                 n("取两条空间射线最近点中点"),
                 n("转换回左相机坐标系 Eigen::Vector3d"),
+                n("记录 bounds / matchRate / matchErr"),
             ]),
         ])),
         ("04 中心线算法", n("LaserExtractionService", [
@@ -416,9 +437,38 @@ def reconstruction_sheets() -> list[tuple[str, Node]]:
                 n("导出前检查空点云"),
             ]),
             n("日志", [
-                n("逐帧点数"),
-                n("空图/ROI 越界/无中心线/标定无效"),
-                n("左右数量不一致提示"),
+                n("逐帧 leftLine/rightLine/coverage"),
+                n("matched/matchRate/matchErrMean/matchErrMax"),
+                n("bounds 与 reason: ok/left_empty/right_empty/both_empty/match_empty/points_empty"),
+            ]),
+        ])),
+        ("06 在线采集与一键流程", n("采集、标定、扫描重建闭环", [
+            n("采集保存", [
+                n("MainWindow::runAcquisition"),
+                n("AcquisitionService::capture"),
+                n("MockAcquisitionProvider 或 HikStereoCameraProvider"),
+                n("生成 capture_yyyyMMdd_HHmmss/left|right"),
+                n("回填 ParameterPanel 重建目录"),
+            ]),
+            n("一键自动标定", [
+                n("IntegratedCalibrationCaptureService::run"),
+                n("要求真实相机，不能使用 Mock"),
+                n("关闭硬触发采集棋盘格"),
+                n("采集目录作为 CalibrationInput left/right"),
+                n("CalibrationService::calibrate 输出 RMS"),
+            ]),
+            n("一键扫描重建", [
+                n("IntegratedScanService::runScanAndReconstruct"),
+                n("要求 HTMSR_WITH_HIK_CAMERA + 真实相机"),
+                n("先加载有效 stereo_calibration.yml"),
+                n("SerialGalvoController 下发振镜参数"),
+                n("HikCameraDevice 配置曝光/增益/触发并取流"),
+                n("生成 scan_yyyyMMdd_HHmmss/left|right 后自动重建"),
+            ]),
+            n("当前边界", [
+                n("扫描前强制重标当前会提示先运行自动标定"),
+                n("扫描图像和棋盘格标定图像不能混用"),
+                n("一键扫描不支持 Mock provider"),
             ]),
         ])),
     ]
@@ -438,6 +488,16 @@ def validate_xmind(path: Path, expected_keywords: list[str]) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate HTMSR XMind and PNG diagrams.")
+    parser.add_argument(
+        "--docs-dir",
+        type=Path,
+        default=DOCS,
+        help="Output directory for generated .xmind and .png files.",
+    )
+    args = parser.parse_args()
+    configure_output_paths(args.docs_dir)
+
     project = project_structure_sheets()
     reconstruction = reconstruction_sheets()
 
@@ -446,8 +506,8 @@ def main() -> None:
     write_xmind(RECON_XMIND, reconstruction)
     write_png(RECON_PNG, reconstruction, "双目激光三维重建流程")
 
-    validate_xmind(PROJECT_XMIND, ["HikCameraDevice", "Package-HtmsrRelease.ps1", "HTMSR_debug", "HTMSR_release"])
-    validate_xmind(RECON_XMIND, ["AcquisitionService", "reconstructFrame", "GrayCentroid", "Steger", "TXT", "PCD"])
+    validate_xmind(PROJECT_XMIND, ["HikCameraDevice", "GalvoController", "IntegratedScanService", "HTMSR_debug", "HTMSR_release"])
+    validate_xmind(RECON_XMIND, ["AcquisitionService", "IntegratedScanService", "reconstructFrame", "GrayCentroid", "Steger", "scan_yyyyMMdd_HHmmss"])
 
     print(PROJECT_XMIND)
     print(PROJECT_PNG)

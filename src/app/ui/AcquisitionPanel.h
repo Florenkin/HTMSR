@@ -59,14 +59,21 @@ public:
     void setStatusText(const QString& text);
     // 更新工作流结果摘要。
     void setResultSummary(const QString& text);
+    void setCalibrationCaptureState(bool active, int capturedFrameCount);
+    void setReconstructionCaptureReady(bool ready);
 
 signals:
     void refreshDevicesRequested();
-    void captureRequested();
-    void autoCalibrationRequested();
-    void scanAndReconstructRequested();
+    void startCalibrationCaptureRequested();
+    void captureCalibrationFrameRequested();
+    void calibrateCapturedFramesRequested();
+    void finishCalibrationCaptureRequested();
+    void startReconstructionCaptureRequested();
+    void reconstructCapturedFramesRequested();
 
 private:
+    void updateActionButtons();
+
     QComboBox* leftDeviceCombo_ = nullptr;
     QComboBox* rightDeviceCombo_ = nullptr;
     QCheckBox* useMockProviderCheck_ = nullptr;
@@ -85,6 +92,7 @@ private:
     QComboBox* galvoDirectionCombo_ = nullptr;
     QSpinBox* galvoCaptureIntervalSpin_ = nullptr;
     QSpinBox* galvoContinuousWaitSpin_ = nullptr;
+    QDoubleSpinBox* galvoTotalRotationAngleSpin_ = nullptr;
     QDoubleSpinBox* galvoStepAngleSpin_ = nullptr;
     QSpinBox* galvoAutoRotationAngleSpin_ = nullptr;
     QSpinBox* galvoForwardSpeedSpin_ = nullptr;
@@ -96,9 +104,17 @@ private:
     QLineEdit* statusEdit_ = nullptr;
     QLineEdit* summaryEdit_ = nullptr;
     QPushButton* refreshButton_ = nullptr;
-    QPushButton* captureButton_ = nullptr;
-    QPushButton* autoCalibrationButton_ = nullptr;
-    QPushButton* scanReconstructButton_ = nullptr;
+    QPushButton* startCalibrationCaptureButton_ = nullptr;
+    QPushButton* captureCalibrationFrameButton_ = nullptr;
+    QPushButton* calibrateCapturedFramesButton_ = nullptr;
+    QPushButton* finishCalibrationCaptureButton_ = nullptr;
+    QPushButton* startReconstructionCaptureButton_ = nullptr;
+    QPushButton* reconstructCapturedFramesButton_ = nullptr;
+
+    bool busy_ = false;
+    bool calibrationCaptureActive_ = false;
+    int calibrationCapturedFrameCount_ = 0;
+    bool reconstructionCaptureReady_ = false;
 };
 
 } // namespace htmsr::app

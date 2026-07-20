@@ -97,6 +97,7 @@ struct StereoCameraConfig {
 struct IntegratedScanConfig {
     StereoCameraConfig stereoCamera;
     GalvoScanConfig galvo;
+    double totalRotationAngleDeg = 22.0;
     CalibrationInput calibrationInput;
     std::string calibrationFile = "stereo_calibration.yml";
     LaserExtractionConfig laserConfig;
@@ -128,6 +129,23 @@ struct IntegratedWorkflowResult {
     bool usedExistingCalibration = false;
     bool success = false;
     std::string message;
+};
+
+// 标定采集会话状态。开始会话后保持相机处于可抓帧状态，用户每移动一次棋盘格手动采集一帧。
+struct CalibrationCaptureSessionState {
+    AcquisitionSessionResult acquisition;
+    bool active = false;
+    bool camerasReady = false;
+};
+
+// 重建采集会话状态。重建采集完成后，保存的 left/right 目录会作为后续重建输入。
+struct ReconstructionCaptureSessionState {
+    AcquisitionSessionResult acquisition;
+    GalvoScanConfig galvo;
+    double totalRotationAngleDeg = 22.0;
+    double stepAngleDeg = 0.02;
+    int requestedFrameCount = 0;
+    bool active = false;
 };
 
 // 单个相机设备抽象接口，后续接入工业相机 SDK 时实现该接口。

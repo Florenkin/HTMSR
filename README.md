@@ -93,6 +93,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Configure-Htms
 
 如果要跳过海康相机编译，可以把本机配置里的 `enableHikCamera` 改为 `false`。这样仍可测试离线标定、离线重建和点云导出。
 
+说明：`CMakeLists.txt` 中 `HTMSR_ENABLE_HIK_CAMERA` 的基础默认值是 `OFF`，公共 `CMakePresets.json` 和本机 `CMakeUserPresets.json` 可以把它打开。迁移到新电脑时优先改本机 JSON，不建议直接改公共 preset。
+
 ## 构建方式
 
 推荐直接用 Visual Studio 2022 打开项目文件夹：
@@ -303,6 +305,8 @@ src/app/acquisition/GalvoController.*
 
 自动标定流程会在线采集左右棋盘格图像，然后调用现有 `CalibrationService`。扫描图像和棋盘格标定图像不是同一种素材，不建议混在同一次任务中完成。
 
+当前一键扫描重建要求启用海康编译、关闭模拟采集、选择真实左右相机，并且提前准备有效 `stereo_calibration.yml`。如果勾选 `扫描前强制重标`，当前实现会提示先运行一键自动标定，而不是在扫描流程里自动采棋盘并重标。
+
 ## 真实硬件联调顺序
 
 建议按下面顺序测试，别一上来就点一键全流程。这样出问题时更容易定位。
@@ -438,10 +442,12 @@ qt.conf
 
 ## 相关文档
 
-- `docs/HTMSR_开发环境表.md`
-- `docs/prepare.md`
-- `docs/环境路径配置脚本说明.md`
-- `docs/standard.md`
+- `C:\PROJECT\docs\HTMSR_项目结构功能说明书.md`
+- `C:\PROJECT\docs\HTMSR_项目分析与离线重建流程.md`
+- `C:\PROJECT\docs\HTMSR_开发环境表.md`
+- `C:\PROJECT\docs\环境路径配置脚本说明.md`
+- `C:\PROJECT\docs\standard.md`
+- `C:\PROJECT\HTMSR\docs\prepare.md`
 - `C:/Users/Administrator/Desktop/振镜通信协议.docx`
 
 后续如果项目结构、依赖版本、在线采集流程或标定/重建策略发生变化，应优先同步更新本 README。

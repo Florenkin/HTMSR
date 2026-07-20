@@ -2,9 +2,11 @@
 
 #include "app/services/AcquisitionService.h"
 #include "app/services/AppConfigService.h"
+#include "app/services/CalibrationCaptureSessionService.h"
 #include "app/services/IntegratedCalibrationCaptureService.h"
 #include "app/services/IntegratedScanService.h"
 #include "app/services/QtLogSink.h"
+#include "app/services/ReconstructionCaptureSessionService.h"
 #include "core/CalibrationService.h"
 #include "core/PointCloudService.h"
 #include "core/ReconstructionService.h"
@@ -58,6 +60,12 @@ private slots:
     void runAutoCalibration();
     // 执行一键扫描重建任务。
     void runScanAndReconstruct();
+    void startCalibrationCapture();
+    void captureCalibrationFrame();
+    void calibrateCapturedFrames();
+    void finishCalibrationCapture();
+    void startReconstructionCapture();
+    void reconstructCapturedFrames();
     // 标定后台任务结束后的 UI 回调。
     void onCalibrationFinished();
     // 重建后台任务结束后的 UI 回调。
@@ -68,6 +76,9 @@ private slots:
     void onAutoCalibrationFinished();
     // 一键扫描重建后台任务结束后的 UI 回调。
     void onScanAndReconstructFinished();
+    void onCalibrationCaptureStarted();
+    void onCalibrationFrameCaptured();
+    void onReconstructionCaptureFinished();
 
 private:
     // 构建顶部菜单栏。
@@ -87,8 +98,10 @@ private:
 
     AppConfigService configService_;
     AcquisitionService acquisitionService_;
+    CalibrationCaptureSessionService calibrationCaptureSessionService_;
     IntegratedCalibrationCaptureService integratedCalibrationCaptureService_;
     IntegratedScanService integratedScanService_;
+    ReconstructionCaptureSessionService reconstructionCaptureSessionService_;
     CalibrationService calibrationService_;
     ReconstructionService reconstructionService_;
     PointCloudService pointCloudService_;
@@ -107,11 +120,17 @@ private:
     CalibrationResult calibration_;
     ReconstructionResult reconstruction_;
     AcquisitionSessionResult acquisition_;
+    AcquisitionSessionResult calibrationCapture_;
+    AcquisitionSessionResult reconstructionCapture_;
     IntegratedWorkflowResult autoCalibrationWorkflow_;
     IntegratedWorkflowResult scanWorkflow_;
+    bool autoExportReconstructionOnFinish_ = false;
     QFutureWatcher<CalibrationResult> calibrationWatcher_;
     QFutureWatcher<ReconstructionResult> reconstructionWatcher_;
     QFutureWatcher<AcquisitionSessionResult> acquisitionWatcher_;
+    QFutureWatcher<CalibrationCaptureSessionState> calibrationCaptureStartWatcher_;
+    QFutureWatcher<AcquisitionSessionResult> calibrationFrameWatcher_;
+    QFutureWatcher<AcquisitionSessionResult> reconstructionCaptureWatcher_;
     QFutureWatcher<IntegratedWorkflowResult> autoCalibrationWatcher_;
     QFutureWatcher<IntegratedWorkflowResult> scanWorkflowWatcher_;
 };
