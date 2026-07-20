@@ -104,6 +104,100 @@ function(htmsr_sanitize_imported_compile_definitions)
     endforeach()
 endfunction()
 
+function(htmsr_generate_msvc_import_lib_from_dll output_variable dll_path library_name)
+    set(${output_variable} "" PARENT_SCOPE)
+    if(NOT MSVC OR NOT EXISTS "${dll_path}")
+        return()
+    endif()
+
+    find_program(HTMSR_DUMPBIN_EXECUTABLE dumpbin)
+    find_program(HTMSR_LIB_EXECUTABLE lib)
+    if(NOT HTMSR_DUMPBIN_EXECUTABLE OR NOT HTMSR_LIB_EXECUTABLE)
+        message(WARNING "dumpbin.exe or lib.exe was not found. Cannot generate import library for ${dll_path}.")
+        return()
+    endif()
+
+    set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated_import_libs")
+    file(MAKE_DIRECTORY "${generated_dir}")
+    set(def_file "${generated_dir}/${library_name}.def")
+    set(import_lib "${generated_dir}/${library_name}.lib")
+
+    execute_process(
+        COMMAND "${HTMSR_DUMPBIN_EXECUTABLE}" /exports "${dll_path}"
+        OUTPUT_VARIABLE dumpbin_output
+        ERROR_VARIABLE dumpbin_error
+        RESULT_VARIABLE dumpbin_result)
+    if(NOT dumpbin_result EQUAL 0)
+        message(WARNING "dumpbin.exe failed for ${dll_path}: ${dumpbin_error}")
+        return()
+    endif()
+
+    string(REPLACE "\r\n" "\n" dumpbin_output "${dumpbin_output}")
+    string(REPLACE "\r" "\n" dumpbin_output "${dumpbin_output}")
+    string(REPLACE "\n" ";" dumpbin_lines "${dumpbin_output}")
+
+    set(exported_symbols)
+    foreach(dumpbin_line IN LISTS dumpbin_lines)
+        if(dumpbin_line MATCHES "^[ \t]+[0-9]+[ \t]+[0-9A-Fa-f]+[ \t]+[0-9A-Fa-f]+[ \t]+([^ \t=]+)")
+            list(APPEND exported_symbols "${CMAKE_MATCH_1}")
+        endif()
+    endforeach()
+
+    if(NOT exported_symbols)
+        message(WARNING "No exports were found in ${dll_path}.")
+        return()
+    endif()
+
+    list(REMOVE_DUPLICATES exported_symbols)
+    get_filename_component(dll_filename "${dll_path}" NAME)
+    file(WRITE "${def_file}" "LIBRARY ${dll_filename}\nEXPORTS\n")
+    foreach(exported_symbol IN LISTS exported_symbols)
+        file(APPEND "${def_file}" "    ${exported_symbol}\n")
+    endforeach()
+
+    execute_process(
+        COMMAND "${HTMSR_LIB_EXECUTABLE}" /nologo /machine:x64 "/def:${def_file}" "/out:${import_lib}"
+        ERROR_VARIABLE lib_error
+        RESULT_VARIABLE lib_result)
+    if(NOT lib_result EQUAL 0 OR NOT EXISTS "${import_lib}")
+        message(WARNING "lib.exe failed to generate ${import_lib}: ${lib_error}")
+        return()
+    endif()
+
+    set(${output_variable} "${import_lib}" PARENT_SCOPE)
+endfunction()
+
+function(htmsr_collect_runtime_dlls output_variable)
+    set(collected_files)
+    foreach(runtime_pattern IN LISTS ARGN)
+        file(GLOB pattern_files "${runtime_pattern}")
+        foreach(runtime_file IN LISTS pattern_files)
+            get_filename_component(runtime_name "${runtime_file}" NAME)
+            if(runtime_name MATCHES "^(api-ms-|concrt|msvcp|ucrtbase|vcruntime)")
+                continue()
+            endif()
+
+            if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT runtime_name MATCHES "d\\.dll$")
+                list(APPEND collected_files "${runtime_file}")
+            endif()
+        endforeach()
+    endforeach()
+
+    if(collected_files)
+        list(REMOVE_DUPLICATES collected_files)
+    endif()
+    set(${output_variable} "${collected_files}" PARENT_SCOPE)
+endfunction()
+
+function(htmsr_add_runtime_copy_commands target)
+    foreach(runtime_file IN LISTS ARGN)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${runtime_file}"
+                "$<TARGET_FILE_DIR:${target}>")
+    endforeach()
+endfunction()
+
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 QUIET)
 if(NOT Eigen3_FOUND)
@@ -347,6 +441,11 @@ if(HTMSR_ENABLE_HIK_CAMERA)
             "${HIK_MVS_RUNTIME_DIR}/*.ini"
             "${HIK_MVS_RUNTIME_DIR}/*.manifest")
         foreach(hik_runtime_file IN LISTS HTMSR_HIK_RUNTIME_FILES)
+            get_filename_component(hik_runtime_name "${hik_runtime_file}" NAME)
+            if(hik_runtime_name MATCHES "^(api-ms-|concrt|msvcp|ucrtbase|vcruntime)")
+                continue()
+            endif()
+
             add_custom_command(TARGET htmsr_app POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${hik_runtime_file}"
@@ -358,9 +457,11 @@ else()
 endif()
 
 if(HTMSR_ENABLE_VTK_VIEWER)
-    find_package(PCL QUIET COMPONENTS visualization)
     find_package(VTK QUIET COMPONENTS
         GUISupportQt
+        CommonCore
+        CommonDataModel
+        FiltersGeneral
         RenderingCore
         RenderingOpenGL2
         InteractionStyle
@@ -371,31 +472,72 @@ if(HTMSR_ENABLE_VTK_VIEWER)
         get_target_property(HTMSR_VTK_QT_IMPLIB_RELEASE VTK::GUISupportQt IMPORTED_IMPLIB_RELEASE)
         get_target_property(HTMSR_VTK_QT_LOCATION_RELEASE VTK::GUISupportQt IMPORTED_LOCATION_RELEASE)
         get_target_property(HTMSR_VTK_QT_IMPLIB_DEBUG VTK::GUISupportQt IMPORTED_IMPLIB_DEBUG)
+        get_target_property(HTMSR_VTK_QT_LOCATION_DEBUG VTK::GUISupportQt IMPORTED_LOCATION_DEBUG)
         if((NOT HTMSR_VTK_QT_IMPLIB_RELEASE AND NOT HTMSR_VTK_QT_LOCATION_RELEASE) AND HTMSR_VTK_QT_IMPLIB_DEBUG)
-            message(WARNING "VTK::GUISupportQt only provides a Debug import library in this environment. "
-                "Disabling the embedded VTK viewer for this non-Debug build to avoid loading Qt debug DLLs.")
-            set(HTMSR_CAN_LINK_VTK_VIEWER FALSE)
+            set(HTMSR_VTK_QT_LOCATION_CANDIDATE "")
+            if(HTMSR_VTK_QT_LOCATION_DEBUG)
+                string(REGEX REPLACE "d\\.dll$" ".dll" HTMSR_VTK_QT_LOCATION_CANDIDATE "${HTMSR_VTK_QT_LOCATION_DEBUG}")
+            endif()
+
+            if(EXISTS "${HTMSR_VTK_QT_LOCATION_CANDIDATE}")
+                htmsr_generate_msvc_import_lib_from_dll(
+                    HTMSR_VTK_QT_GENERATED_IMPLIB
+                    "${HTMSR_VTK_QT_LOCATION_CANDIDATE}"
+                    "vtkGUISupportQt-9.1")
+                if(HTMSR_VTK_QT_GENERATED_IMPLIB)
+                    set_target_properties(VTK::GUISupportQt PROPERTIES
+                        IMPORTED_CONFIGURATIONS "RELEASE;DEBUG"
+                        IMPORTED_IMPLIB_RELEASE "${HTMSR_VTK_QT_GENERATED_IMPLIB}"
+                        IMPORTED_LOCATION_RELEASE "${HTMSR_VTK_QT_LOCATION_CANDIDATE}")
+                    set(HTMSR_VTK_QT_IMPLIB_RELEASE "${HTMSR_VTK_QT_GENERATED_IMPLIB}")
+                    set(HTMSR_VTK_QT_LOCATION_RELEASE "${HTMSR_VTK_QT_LOCATION_CANDIDATE}")
+                    message(STATUS "Generated Release import library for VTK::GUISupportQt: ${HTMSR_VTK_QT_GENERATED_IMPLIB}")
+                endif()
+            endif()
+
+            if(NOT HTMSR_VTK_QT_IMPLIB_RELEASE AND NOT HTMSR_VTK_QT_LOCATION_RELEASE)
+                message(WARNING "VTK::GUISupportQt only provides a Debug import library in this environment. "
+                    "Disabling the embedded VTK viewer for this non-Debug build to avoid loading Qt debug DLLs.")
+                set(HTMSR_CAN_LINK_VTK_VIEWER FALSE)
+            endif()
         endif()
     endif()
 
-    if(PCL_VISUALIZATION_FOUND AND VTK_FOUND AND HTMSR_CAN_LINK_VTK_VIEWER)
-        htmsr_normalize_compile_definitions(HTMSR_PCL_VISUALIZATION_DEFINITIONS ${PCL_DEFINITIONS})
-        set(PCL_DEFINITIONS "${HTMSR_PCL_VISUALIZATION_DEFINITIONS}")
-        htmsr_sanitize_imported_compile_definitions(${PCL_LIBRARIES})
-
-        set(HTMSR_PCL_VIEWER_LINK_LIBRARIES)
-        foreach(pcl_library IN LISTS PCL_LIBRARIES)
-            list(APPEND HTMSR_PCL_VIEWER_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
-        endforeach()
-
-        target_link_libraries(htmsr_app PRIVATE ${HTMSR_PCL_VIEWER_LINK_LIBRARIES} ${VTK_LIBRARIES})
+    if(VTK_FOUND AND HTMSR_CAN_LINK_VTK_VIEWER)
+        target_link_libraries(htmsr_app PRIVATE ${VTK_LIBRARIES})
         target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=1)
         vtk_module_autoinit(
             TARGETS htmsr_app
             MODULES ${VTK_LIBRARIES}
         )
+
+        if(WIN32)
+            set(HTMSR_VIEWER_RUNTIME_PATTERNS)
+
+            if(PCL_DIR)
+                get_filename_component(HTMSR_PCL_CMAKE_DIR "${PCL_DIR}" ABSOLUTE)
+                get_filename_component(HTMSR_PCL_ROOT_DIR "${HTMSR_PCL_CMAKE_DIR}" DIRECTORY)
+                list(APPEND HTMSR_VIEWER_RUNTIME_PATTERNS
+                    "${HTMSR_PCL_ROOT_DIR}/bin/*.dll"
+                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/FLANN/bin/*.dll"
+                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/Qhull/bin/*.dll"
+                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/Boost/lib/*.dll"
+                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/OpenNI2/Redist/*.dll")
+            endif()
+
+            if(VTK_DIR)
+                get_filename_component(HTMSR_VTK_CMAKE_DIR "${VTK_DIR}" ABSOLUTE)
+                get_filename_component(HTMSR_VTK_CMAKE_PARENT_DIR "${HTMSR_VTK_CMAKE_DIR}" DIRECTORY)
+                get_filename_component(HTMSR_VTK_LIB_DIR "${HTMSR_VTK_CMAKE_PARENT_DIR}" DIRECTORY)
+                get_filename_component(HTMSR_VTK_ROOT_DIR "${HTMSR_VTK_LIB_DIR}" DIRECTORY)
+                list(APPEND HTMSR_VIEWER_RUNTIME_PATTERNS "${HTMSR_VTK_ROOT_DIR}/bin/*.dll")
+            endif()
+
+            htmsr_collect_runtime_dlls(HTMSR_VIEWER_RUNTIME_FILES ${HTMSR_VIEWER_RUNTIME_PATTERNS})
+            htmsr_add_runtime_copy_commands(htmsr_app ${HTMSR_VIEWER_RUNTIME_FILES})
+        endif()
     else()
-        message(WARNING "PCL visualization or compatible VTK Qt components were not found. Building with a placeholder point cloud view.")
+        message(WARNING "Compatible VTK Qt components were not found. Building with a placeholder point cloud view.")
         target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=0)
     endif()
 else()

@@ -6,6 +6,11 @@
 #include <QFileInfo>
 #include <QMetaType>
 
+#if HTMSR_WITH_VTK_VIEWER
+#include <QSurfaceFormat>
+#include <QVTKOpenGLNativeWidget.h>
+#endif
+
 int main(int argc, char* argv[])
 {
     const QString executablePath = argc > 0 ? QString::fromLocal8Bit(argv[0]) : QString();
@@ -18,6 +23,10 @@ int main(int argc, char* argv[])
     // Qt Widgets 程序入口，先锁定当前可执行文件目录下的插件路径，避免 VS 调试环境误加载全局 Qt DLL 和插件。
     qputenv("QT_PLUGIN_PATH", pluginRoot);
     qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", platformPluginPath);
+
+#if HTMSR_WITH_VTK_VIEWER
+    QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
+#endif
 
     QApplication app(argc, argv);
     // LogMessage 会跨线程通过 Qt signal 传递，需要注册元类型。

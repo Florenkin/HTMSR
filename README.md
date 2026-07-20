@@ -10,7 +10,7 @@ HTMSR 是一个基于 `Qt 5.15.2 + Visual Studio 2022 + CMake + OpenCV + Eigen +
 - 离线重建：读取左右线激光图像，提取激光中心线，按双目几何恢复三维点云。
 - 激光中心线提取：支持灰度重心法和 Steger 方法。
 - 点云输出：支持 TXT / PCD 导出。
-- 点云显示：Debug 环境可使用 VTK Qt 三维视图；Release 在当前 VTK 环境不完整时自动退回占位视图。
+- 点云显示：Debug / Release 均可使用 VTK Qt 三维视图；如果 VTK Qt 组件不可用，会自动退回占位视图。
 - 在线采集：支持海康 MVS 相机枚举、连接、曝光/增益/触发参数配置、左右图像采集保存。
 - 振镜联动：支持按 `振镜通信协议.docx` 通过 Windows 串口 COM 下发振镜、电机、激光和采集节拍相关参数。
 - 一键流程：提供“一键自动标定”和“一键扫描重建”入口，复用现有标定与重建核心服务。
@@ -328,12 +328,12 @@ src/app/acquisition/GalvoController.*
 
 | 模式 | 说明 |
 |---|---|
-| VTK 三维视图 | 使用 `QVTKOpenGLNativeWidget + PCLVisualizer`，可交互旋转缩放。 |
+| VTK 三维视图 | 使用 `QVTKOpenGLNativeWidget + vtkPoints/vtkActor` 原生 VTK 管线，可交互旋转缩放。 |
 | 占位视图 | 只显示点数和提示文字，仍可标定、重建和导出点云。 |
 
-当前 Release 构建如果检测到 `VTK::GUISupportQt` 只有 Debug 导入库，会自动禁用内嵌 VTK 视图，避免 Release 程序加载 `Qt5Cored.dll` 这类 Debug Qt DLL。Debug 构建仍可使用现有 Debug VTK 视图。
+当前 Release 构建优先使用 PCL 自带 VTK 的 Release DLL。如果该环境缺少 `VTK::GUISupportQt` 的 Release 导入库，但存在匹配的 `vtkGUISupportQt-9.1.dll`，CMake 会用 `dumpbin`/`lib` 在构建目录生成 Release 导入库，并启用内嵌 VTK 视图。
 
-如果要让 Release 也内嵌显示点云，需要准备完整的 Release 版 VTK Qt 库，至少要有匹配的 `vtkGUISupportQt-9.1.dll` 和对应 Release `.lib`。
+构建输出目录会自动拷贝 PCL/VTK/FLANN/Qhull/Boost/OpenNI2 相关运行库；Release 构建会过滤 `*d.dll`、`*-gd.dll`、`*_rd.dll` 这类 Debug 运行库，并跳过 `msvcp*`、`vcruntime*`、`concrt*` 等 VC runtime 副本，避免 Qt/VTK/PCL 运行库混用。
 
 ## 测试素材
 
@@ -391,7 +391,7 @@ qt.conf
 
 **Release 弹出 Qt5Cored.dll 或 QWidget before QApplication**
 
-这是 Release 混入 Debug Qt/VTK 运行库的典型表现。当前 CMake 已增加保护：非 Debug 构建如果只能找到 Debug 的 `VTK::GUISupportQt`，会自动退回占位点云视图。重新配置并构建 Release 即可。
+这是 Release 混入不匹配 Qt/VTK/VC 运行库的典型表现。当前 CMake 会为缺失的 `VTK::GUISupportQt` Release 导入库生成本地 `.lib`，并在拷贝运行库时过滤 Debug DLL 和 VC runtime 副本。重新配置并构建 Release 后，确认输出目录中没有 `Qt5Cored.dll`、`vtk*9.1d.dll`、`msvcp*.dll`、`vcruntime*.dll` 这类文件。
 
 **在线采集枚举不到相机**
 
