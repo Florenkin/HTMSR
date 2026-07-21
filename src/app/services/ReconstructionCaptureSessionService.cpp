@@ -149,7 +149,10 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
 #if HTMSR_WITH_HIK_CAMERA
         SerialGalvoController galvoController(config.galvo);
         if (!galvoController.connect()) {
-            throw std::runtime_error("Failed to connect galvo controller.");
+            throw std::runtime_error(
+                "Failed to open galvo serial port: " + config.galvo.portName +
+                ". Check that the galvo controller is powered on, the COM port is correct, "
+                "and no other program is using the port. Use mock acquisition to test without galvo hardware.");
         }
 
         try {

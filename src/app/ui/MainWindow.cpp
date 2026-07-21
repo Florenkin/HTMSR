@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QException>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFuture>
@@ -23,6 +24,55 @@
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QtConcurrent>
+
+#include <exception>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace {
+
+class WorkerException final : public QException {
+public:
+    explicit WorkerException(std::string message)
+        : message_(std::move(message))
+    {
+    }
+
+    void raise() const override
+    {
+        throw *this;
+    }
+
+    WorkerException* clone() const override
+    {
+        return new WorkerException(*this);
+    }
+
+    const char* what() const noexcept override
+    {
+        return message_.c_str();
+    }
+
+private:
+    std::string message_;
+};
+
+template <typename Function>
+auto runWorkerTask(const char* taskName, Function&& function) -> decltype(function())
+{
+    try {
+        return function();
+    } catch (const WorkerException&) {
+        throw;
+    } catch (const std::exception& ex) {
+        throw WorkerException(ex.what());
+    } catch (...) {
+        throw WorkerException(std::string(taskName) + " failed with an unknown non-standard exception.");
+    }
+}
+
+} // namespace
 
 namespace htmsr::app {
 
@@ -141,8 +191,10 @@ void MainWindow::runCalibration()
     const CalibrationInput input = parameterPanel_->calibrationInput();
     setBusy(true, QString::fromUtf8("标定中..."));
     calibrationWatcher_.setFuture(QtConcurrent::run([input]() {
-        CalibrationService service;
-        return service.calibrate(input);
+        return runWorkerTask("Calibration", [input]() {
+            CalibrationService service;
+            return service.calibrate(input);
+        });
     }));
 }
 
@@ -195,8 +247,10 @@ void MainWindow::runReconstruction()
     autoExportReconstructionOnFinish_ = false;
     setBusy(true, QString::fromUtf8("重建中..."));
     reconstructionWatcher_.setFuture(QtConcurrent::run([input]() {
-        ReconstructionService service;
-        return service.reconstruct(input);
+        return runWorkerTask("Reconstruction", [input]() {
+            ReconstructionService service;
+            return service.reconstruct(input);
+        });
     }));
 }
 
@@ -301,8 +355,10 @@ void MainWindow::runAcquisition()
     setBusy(true, QString::fromUtf8("采集中..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("采集中..."));
     acquisitionWatcher_.setFuture(QtConcurrent::run([config]() {
-        AcquisitionService service;
-        return service.capture(config);
+        return runWorkerTask("Acquisition", [config]() {
+            AcquisitionService service;
+            return service.capture(config);
+        });
     }));
 }
 
@@ -321,7 +377,9 @@ void MainWindow::runAutoCalibration()
     setBusy(true, QString::fromUtf8("自动标定中..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("自动标定中..."));
     autoCalibrationWatcher_.setFuture(QtConcurrent::run([this, config]() {
-        return integratedCalibrationCaptureService_.run(config);
+        return runWorkerTask("Auto calibration", [this, config]() {
+            return integratedCalibrationCaptureService_.run(config);
+        });
     }));
 }
 
@@ -353,7 +411,9 @@ void MainWindow::runScanAndReconstruct()
     setBusy(true, QString::fromUtf8("扫描重建中..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("扫描重建中..."));
     scanWorkflowWatcher_.setFuture(QtConcurrent::run([this, config]() {
-        return integratedScanService_.runScanAndReconstruct(config);
+        return runWorkerTask("Scan and reconstruct", [this, config]() {
+            return integratedScanService_.runScanAndReconstruct(config);
+        });
     }));
 }
 
@@ -371,7 +431,9 @@ void MainWindow::startCalibrationCapture()
     setBusy(true, QString::fromUtf8("开始标定采集中..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在连接相机并创建标定采集会话..."));
     calibrationCaptureStartWatcher_.setFuture(QtConcurrent::run([this, config]() {
-        return calibrationCaptureSessionService_.start(config);
+        return runWorkerTask("Start calibration capture", [this, config]() {
+            return calibrationCaptureSessionService_.start(config);
+        });
     }));
 }
 
@@ -384,7 +446,9 @@ void MainWindow::captureCalibrationFrame()
     setBusy(true, QString::fromUtf8("采集当前标定帧..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在采集当前标定帧..."));
     calibrationFrameWatcher_.setFuture(QtConcurrent::run([this]() {
-        return calibrationCaptureSessionService_.captureCurrentFrame();
+        return runWorkerTask("Capture calibration frame", [this]() {
+            return calibrationCaptureSessionService_.captureCurrentFrame();
+        });
     }));
 }
 
@@ -415,8 +479,10 @@ void MainWindow::calibrateCapturedFrames()
     setBusy(true, QString::fromUtf8("标定当前采集帧..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在标定当前采集帧..."));
     calibrationWatcher_.setFuture(QtConcurrent::run([input]() {
-        CalibrationService service;
-        return service.calibrate(input);
+        return runWorkerTask("Calibration", [input]() {
+            CalibrationService service;
+            return service.calibrate(input);
+        });
     }));
 }
 
@@ -444,7 +510,9 @@ void MainWindow::startReconstructionCapture()
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在采集重建图像序列..."));
     acquisitionPanel_->setReconstructionCaptureReady(false);
     reconstructionCaptureWatcher_.setFuture(QtConcurrent::run([this, config]() {
-        return reconstructionCaptureSessionService_.capture(config);
+        return runWorkerTask("Reconstruction capture", [this, config]() {
+            return reconstructionCaptureSessionService_.capture(config);
+        });
     }));
 }
 
@@ -475,8 +543,10 @@ void MainWindow::reconstructCapturedFrames()
     setBusy(true, QString::fromUtf8("重建当前采集帧..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在重建当前采集帧..."));
     reconstructionWatcher_.setFuture(QtConcurrent::run([input]() {
-        ReconstructionService service;
-        return service.reconstruct(input);
+        return runWorkerTask("Reconstruction", [input]() {
+            ReconstructionService service;
+            return service.reconstruct(input);
+        });
     }));
 }
 

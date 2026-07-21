@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <stdexcept>
 
 namespace htmsr {
@@ -64,6 +65,31 @@ std::vector<cv::Mat> readImages(const std::vector<std::string>& paths)
     return images;
 }
 
+std::string joinImageNumbers(const std::vector<int>& imageNumbers)
+{
+    if (imageNumbers.empty()) {
+        return "none";
+    }
+
+    std::ostringstream stream;
+    for (size_t i = 0; i < imageNumbers.size(); ++i) {
+        if (i > 0) {
+            stream << ", ";
+        }
+        stream << imageNumbers[i];
+    }
+    return stream.str();
+}
+
+std::string chessboardHint(const cv::Size& boardSize)
+{
+    std::ostringstream stream;
+    stream << "Configured board inner corners=" << boardSize.width << "x" << boardSize.height
+           << ". Check the printed board inner-corner count, move the board between captures, "
+              "and keep the full chessboard sharp and inside both camera views.";
+    return stream.str();
+}
+
 } // namespace
 
 CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) const
@@ -101,11 +127,13 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 
     // 双目标定要求同一时刻的左右图都成功检测到棋盘角点。
     int failures = 0;
+    std::vector<int> failedStereoPairNumbers;
     for (int i = 0; i < pairCount; ++i) {
         cv::Mat leftGray = toGray(cv::imread(pairedLeft[i], cv::IMREAD_COLOR));
         cv::Mat rightGray = toGray(cv::imread(pairedRight[i], cv::IMREAD_COLOR));
         if (leftGray.empty() || rightGray.empty()) {
             ++failures;
+            failedStereoPairNumbers.push_back(i + 1);
             continue;
         }
 
@@ -124,7 +152,13 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 
         if (!leftFound || !rightFound) {
             ++failures;
-            Logger::instance().warning("Calibration", "Stereo corners not found in pair index " + std::to_string(i));
+            failedStereoPairNumbers.push_back(i + 1);
+            Logger::instance().warning(
+                "Calibration",
+                "Stereo corners not found in pair index " + std::to_string(i) +
+                    " (frame " + std::to_string(i + 1) + "). left=" +
+                    std::string(leftFound ? "yes" : "no") +
+                    ", right=" + std::string(rightFound ? "yes" : "no"));
             continue;
         }
 
@@ -140,7 +174,15 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     }
 
     if (stereoObjectPoints.empty()) {
-        throw std::runtime_error("No valid stereo chessboard pairs were found.");
+        throw std::runtime_error(
+            "Stereo calibration failed: no valid left/right chessboard pairs were found. Failed frames: " +
+            joinImageNumbers(failedStereoPairNumbers) + ". " + chessboardHint(input.boardSize));
+    }
+    if (stereoObjectPoints.size() < 3) {
+        throw std::runtime_error(
+            "Stereo calibration failed: only " + std::to_string(stereoObjectPoints.size()) +
+            " valid stereo chessboard pair(s) were found. Need at least 3, preferably 10 or more. Failed frames: " +
+            joinImageNumbers(failedStereoPairNumbers) + ". " + chessboardHint(input.boardSize));
     }
 
     CalibrationResult result;
@@ -158,21 +200,28 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 
     cv::Size imageSize = leftImages.front().size();
     // 在已知左右内参的基础上求解双目旋转、平移、本质矩阵和基础矩阵。
-    result.rms = cv::stereoCalibrate(
-        stereoObjectPoints,
-        leftImagePoints,
-        rightImagePoints,
-        result.K1,
-        result.D1,
-        result.K2,
-        result.D2,
-        imageSize,
-        result.R,
-        result.t,
-        result.E,
-        result.F,
-        cv::CALIB_FIX_INTRINSIC,
-        cv::TermCriteria(cv::TermCriteria::COUNT, 30, 1e-6));
+    try {
+        result.rms = cv::stereoCalibrate(
+            stereoObjectPoints,
+            leftImagePoints,
+            rightImagePoints,
+            result.K1,
+            result.D1,
+            result.K2,
+            result.D2,
+            imageSize,
+            result.R,
+            result.t,
+            result.E,
+            result.F,
+            cv::CALIB_FIX_INTRINSIC,
+            cv::TermCriteria(cv::TermCriteria::COUNT, 30, 1e-6));
+    } catch (const cv::Exception& ex) {
+        throw std::runtime_error(
+            "OpenCV stereo calibration failed after detecting " +
+            std::to_string(stereoObjectPoints.size()) + " valid pair(s). " +
+            chessboardHint(input.boardSize) + " OpenCV: " + ex.what());
+    }
 
     Logger::instance().info("Calibration", "Stereo calibration completed. RMS=" + std::to_string(result.rms));
     if (!input.outputFile.empty()) {
@@ -253,10 +302,12 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
 
     cv::Size imageSize;
     int failures = 0;
+    std::vector<int> failedImageNumbers;
     for (size_t i = 0; i < images.size(); ++i) {
         const auto gray = toGray(images[i]);
         if (gray.empty()) {
             ++failures;
+            failedImageNumbers.push_back(static_cast<int>(i + 1));
             continue;
         }
         imageSize = gray.size();
@@ -271,7 +322,11 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
 
         if (!found) {
             ++failures;
-            Logger::instance().warning("Calibration", cameraName + " camera corners not found in image index " + std::to_string(i));
+            failedImageNumbers.push_back(static_cast<int>(i + 1));
+            Logger::instance().warning(
+                "Calibration",
+                cameraName + " camera corners not found in image index " + std::to_string(i) +
+                    " (frame " + std::to_string(i + 1) + ")");
             continue;
         }
 
@@ -283,19 +338,35 @@ CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(
     }
 
     if (imagePoints.empty()) {
-        throw std::runtime_error(cameraName + " camera calibration failed: no valid chessboard images.");
+        throw std::runtime_error(
+            cameraName + " camera calibration failed: no valid chessboard images. Failed frames: " +
+            joinImageNumbers(failedImageNumbers) + ". " + chessboardHint(boardSize));
+    }
+    if (imagePoints.size() < 3) {
+        throw std::runtime_error(
+            cameraName + " camera calibration failed: only " + std::to_string(imagePoints.size()) +
+            " valid chessboard image(s) were found. Need at least 3, preferably 10 or more. Failed frames: " +
+            joinImageNumbers(failedImageNumbers) + ". " + chessboardHint(boardSize));
     }
 
     CameraCalibration result;
     result.cameraMatrix = cv::Mat::eye(3, 3, CV_64F);
     result.distortion = cv::Mat::zeros(1, 5, CV_64F);
     result.failureCount = failures;
+    result.failedImageNumbers = failedImageNumbers;
     result.successCount = static_cast<int>(imagePoints.size());
 
     std::vector<cv::Mat> rvecs;
     std::vector<cv::Mat> tvecs;
     // OpenCV 单目标定，求解相机内参、畸变参数和每幅图的外参。
-    cv::calibrateCamera(objectPoints, imagePoints, imageSize, result.cameraMatrix, result.distortion, rvecs, tvecs);
+    try {
+        cv::calibrateCamera(objectPoints, imagePoints, imageSize, result.cameraMatrix, result.distortion, rvecs, tvecs);
+    } catch (const cv::Exception& ex) {
+        throw std::runtime_error(
+            cameraName + " camera OpenCV calibration failed after detecting " +
+            std::to_string(imagePoints.size()) + " valid image(s). " +
+            chessboardHint(boardSize) + " OpenCV: " + ex.what());
+    }
 
     // 对每一幅有效图像单独计算重投影误差，便于后续 UI 展示和质量判断。
     result.perImageErrors.reserve(imagePoints.size());

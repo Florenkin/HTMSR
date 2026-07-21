@@ -389,7 +389,11 @@ bool SerialGalvoController::connect()
         0,
         nullptr);
     if (impl_->handle == INVALID_HANDLE_VALUE) {
-        Logger::instance().error("Galvo", "Failed to open galvo serial port: " + impl_->config.portName);
+        const DWORD errorCode = GetLastError();
+        Logger::instance().error(
+            "Galvo",
+            "Failed to open galvo serial port: " + impl_->config.portName +
+                ", Windows error=" + std::to_string(errorCode));
         return false;
     }
 

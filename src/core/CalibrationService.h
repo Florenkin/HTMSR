@@ -45,6 +45,7 @@ private:
         cv::Mat cameraMatrix;
         cv::Mat distortion;
         std::vector<double> perImageErrors;
+        std::vector<int> failedImageNumbers;
         int successCount = 0;
         int failureCount = 0;
     };
