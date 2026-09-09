@@ -1,0 +1,5 @@
+Hardware fingerprint: bfebfbff00090672-240335171902985
+
+No valid license
+Error: Failure in loading license
+Please send us your hardware fingerprint to apply for license

@@ -1,0 +1,51 @@
+{
+  "version": 5,
+  "configurePresets": [
+    {
+      "name": "vs2022-x64-debug",
+      "displayName": "Visual Studio 2022 x64 Debug (Qt 5.15.2)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/vs2022-x64-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HTMSR_ENABLE_VTK_VIEWER": "ON",
+        "HTMSR_REQUIRE_VTK_VIEWER": "ON",
+        "HTMSR_ENABLE_HIK_CAMERA": "ON",
+        "HIK_MVS_ROOT": "C:/ENVIORNMENT/MVS",
+        "HIK_MVS_RUNTIME_DIR": "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64",
+        "CMAKE_PREFIX_PATH": "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64;C:/ENVIORNMENT/VTK-9.1.0-qt5-release/lib/cmake/vtk-9.1;C:/ENVIORNMENT/opencv_450_vs2019/x64/vc16/lib;C:/ENVIORNMENT/PCL 1.12.1;C:/ENVIORNMENT/PCL 1.12.1/cmake;C:/ENVIORNMENT/PCL 1.12.1/3rdParty/Boost/lib/cmake/Boost-1.78.0;C:/ENVIORNMENT/PCL 1.12.1/3rdParty/Qhull/lib/cmake/Qhull",
+        "OpenCV_DIR": "C:/ENVIORNMENT/opencv_450_vs2019/x64/vc16/lib",
+        "PCL_DIR": "C:/ENVIORNMENT/PCL 1.12.1/cmake",
+        "VTK_DIR": "C:/ENVIORNMENT/VTK-9.1.0-qt5-release/lib/cmake/vtk-9.1",
+        "Qt5_DIR": "C:/ENVIORNMENT/qt/5.15.2/msvc2019_64/lib/cmake/Qt5",
+        "HTMSR_EIGEN_INCLUDE_DIR": "C:/ENVIORNMENT/ceresLib/Eigen"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "vs2022-x64-release",
+      "displayName": "Visual Studio 2022 x64 Release (Qt 5.15.2)",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/vs2022-x64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HTMSR_ENABLE_VTK_VIEWER": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "vs2022-x64-debug"
+    },
+    {
+      "name": "release",
+      "configurePreset": "vs2022-x64-release"
+    }
+  ]
+}
