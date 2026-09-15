@@ -119,6 +119,28 @@ std::vector<unsigned char> buildPairCommand(GalvoCommand command, unsigned int f
     return frame;
 }
 
+size_t expectedResponseSize(const std::vector<unsigned char>& request)
+{
+    if (request.size() < 4) {
+        return 0;
+    }
+
+    switch (request[3]) {
+    case static_cast<unsigned char>(GalvoCommand::StepAngleGet):
+    case static_cast<unsigned char>(GalvoCommand::ForwardSpeedGet):
+    case static_cast<unsigned char>(GalvoCommand::ReverseSpeedGet):
+        return 13;
+    case static_cast<unsigned char>(GalvoCommand::SyncModeGet):
+    case static_cast<unsigned char>(GalvoCommand::AutoRotationAngleGet):
+    case static_cast<unsigned char>(GalvoCommand::CaptureIntervalGet):
+    case static_cast<unsigned char>(GalvoCommand::ContinuousWaitGet):
+    case static_cast<unsigned char>(GalvoCommand::VoltageRangeGet):
+        return 9;
+    default:
+        return 0;
+    }
+}
+
 unsigned int clampInterval(int value)
 {
     return static_cast<unsigned int>(std::clamp(value, 1, 255));
@@ -211,9 +233,51 @@ bool startsWithHeader(const std::vector<unsigned char>& bytes)
         bytes[2] == kFrameHeader2;
 }
 
+bool hasValidChecksum(const std::vector<unsigned char>& bytes, size_t offset, size_t length)
+{
+    if (length < 5 || offset > bytes.size() || length > bytes.size() - offset) {
+        return false;
+    }
+
+    unsigned int sum = 0;
+    for (size_t index = offset; index + 1 < offset + length; ++index) {
+        sum += bytes[index];
+    }
+    return static_cast<unsigned char>(sum & 0xFFu) == bytes[offset + length - 1];
+}
+
+bool tryExtractExpectedResponse(
+    const std::vector<unsigned char>& response,
+    const std::vector<unsigned char>& request,
+    size_t expectedBytes,
+    std::vector<unsigned char>& frame)
+{
+    frame.clear();
+    if (request.size() < 4 || expectedBytes < 5 || response.size() < expectedBytes) {
+        return false;
+    }
+
+    for (size_t offset = 0; offset + expectedBytes <= response.size(); ++offset) {
+        if (response[offset] != kFrameHeader0 ||
+            response[offset + 1] != kFrameHeader1 ||
+            response[offset + 2] != kFrameHeader2 ||
+            response[offset + 3] != request[3]) {
+            continue;
+        }
+        if (!hasValidChecksum(response, offset, expectedBytes)) {
+            continue;
+        }
+
+        frame.assign(response.begin() + static_cast<std::ptrdiff_t>(offset),
+            response.begin() + static_cast<std::ptrdiff_t>(offset + expectedBytes));
+        return true;
+    }
+    return false;
+}
+
 bool tryParseSingleUint32Response(const std::vector<unsigned char>& response, unsigned int& value)
 {
-    if (!startsWithHeader(response) || response.size() < 9) {
+    if (!startsWithHeader(response) || response.size() < 9 || !hasValidChecksum(response, 0, 9)) {
         return false;
     }
     value = static_cast<unsigned int>(response[4]) |
@@ -225,7 +289,7 @@ bool tryParseSingleUint32Response(const std::vector<unsigned char>& response, un
 
 bool tryParsePairResponse(const std::vector<unsigned char>& response, unsigned int& firstValue, unsigned int& secondValue)
 {
-    if (!startsWithHeader(response) || response.size() < 13) {
+    if (!startsWithHeader(response) || response.size() < 13 || !hasValidChecksum(response, 0, 13)) {
         return false;
     }
     firstValue = static_cast<unsigned int>(response[4]) |
@@ -259,8 +323,14 @@ std::wstring toWide(const std::string& value)
         return std::wstring(value.begin(), value.end());
     }
 
-    std::wstring wide(size - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, wide.data(), size);
+    std::wstring wide(size, L'\0');
+    const int written = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, wide.data(), size);
+    if (written <= 0) {
+        return std::wstring(value.begin(), value.end());
+    }
+    if (!wide.empty() && wide.back() == L'\0') {
+        wide.pop_back();
+    }
     return wide;
 }
 
@@ -483,6 +553,13 @@ GalvoCommandResult sendAndReceive(
         return result;
     }
 
+    // Clear bytes left by an earlier command before sending a request that
+    // expects a response. Clearing RX after WriteFile creates a race: a fast
+    // controller response may already be queued and would be discarded.
+    if (expectResponse) {
+        PurgeComm(handle, PURGE_RXCLEAR);
+    }
+
     DWORD bytesWritten = 0;
     if (!WriteFile(handle, request.data(), static_cast<DWORD>(request.size()), &bytesWritten, nullptr) || bytesWritten != request.size()) {
         result.success = false;
@@ -502,7 +579,9 @@ GalvoCommandResult sendAndReceive(
     }
 
     const ULONGLONG startTick = GetTickCount64();
+    const size_t expectedBytes = expectedResponseSize(request);
     std::array<unsigned char, 64> buffer{};
+    std::vector<unsigned char> matchedResponse;
     while (GetTickCount64() - startTick < static_cast<ULONGLONG>(config.commandTimeoutMs)) {
         DWORD errors = 0;
         COMSTAT stat{};
@@ -518,14 +597,24 @@ GalvoCommandResult sendAndReceive(
             }
         }
 
-        if (!result.response.empty()) {
+        if (!result.response.empty() &&
+            (expectedBytes == 0 || tryExtractExpectedResponse(result.response, request, expectedBytes, matchedResponse))) {
             break;
         }
 
         Sleep(10);
     }
 
-    result.success = !result.response.empty();
+    if (expectedBytes > 0) {
+        if (tryExtractExpectedResponse(result.response, request, expectedBytes, matchedResponse)) {
+            result.response = matchedResponse;
+            result.success = true;
+        } else {
+            result.success = false;
+        }
+    } else {
+        result.success = !result.response.empty();
+    }
     result.message = result.success ? "Command response received." : "No response received before timeout.";
     Logger::instance().log(
         result.success ? LogLevel::Info : LogLevel::Warning,

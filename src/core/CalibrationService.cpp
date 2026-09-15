@@ -382,37 +382,47 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 
 bool CalibrationService::loadCalibration(const std::string& filename, CalibrationResult& result) const
 {
-    // 保持 OpenCV FileStorage 格式，兼容参考代码生成的 yml 标定文件。
-    cv::FileStorage fs(filename, cv::FileStorage::READ);
-    if (!fs.isOpened()) {
-        Logger::instance().error("Calibration", "Failed to open calibration file: " + filename);
+    try {
+        // 保持 OpenCV FileStorage 格式，兼容参考代码生成的 yml 标定文件。
+        cv::FileStorage fs(filename, cv::FileStorage::READ);
+        if (!fs.isOpened()) {
+            Logger::instance().error("Calibration", "Failed to open calibration file: " + filename);
+            return false;
+        }
+
+        fs["rms"] >> result.rms;
+        fs["K1"] >> result.K1;
+        fs["D1"] >> result.D1;
+        fs["K2"] >> result.K2;
+        fs["D2"] >> result.D2;
+        fs["P1"] >> result.P1;
+        fs["P2"] >> result.P2;
+        fs["R"] >> result.R;
+        fs["t"] >> result.t;
+        fs["E"] >> result.E;
+        fs["F"] >> result.F;
+
+        // 旧标定文件可能没有 P1/P2，这里使用相机内参作为默认投影矩阵。
+        if (result.P1.empty() && !result.K1.empty()) {
+            result.P1 = result.K1.clone();
+        }
+        if (result.P2.empty() && !result.K2.empty()) {
+            result.P2 = result.K2.clone();
+        }
+
+        const bool valid = result.isValid();
+        Logger::instance().log(valid ? LogLevel::Info : LogLevel::Error, "Calibration",
+            valid ? "Calibration file loaded: " + filename : "Calibration file is missing required matrices: " + filename);
+        return valid;
+    } catch (const cv::Exception& ex) {
+        Logger::instance().error("Calibration", "OpenCV failed to load calibration file: " + filename + ", " + ex.what());
+        result = CalibrationResult{};
+        return false;
+    } catch (const std::exception& ex) {
+        Logger::instance().error("Calibration", "Failed to load calibration file: " + filename + ", " + ex.what());
+        result = CalibrationResult{};
         return false;
     }
-
-    fs["rms"] >> result.rms;
-    fs["K1"] >> result.K1;
-    fs["D1"] >> result.D1;
-    fs["K2"] >> result.K2;
-    fs["D2"] >> result.D2;
-    fs["P1"] >> result.P1;
-    fs["P2"] >> result.P2;
-    fs["R"] >> result.R;
-    fs["t"] >> result.t;
-    fs["E"] >> result.E;
-    fs["F"] >> result.F;
-
-    // 旧标定文件可能没有 P1/P2，这里使用相机内参作为默认投影矩阵。
-    if (result.P1.empty() && !result.K1.empty()) {
-        result.P1 = result.K1.clone();
-    }
-    if (result.P2.empty() && !result.K2.empty()) {
-        result.P2 = result.K2.clone();
-    }
-
-    const bool valid = result.isValid();
-    Logger::instance().log(valid ? LogLevel::Info : LogLevel::Error, "Calibration",
-        valid ? "Calibration file loaded: " + filename : "Calibration file is missing required matrices: " + filename);
-    return valid;
 }
 
 void CalibrationService::saveCalibration(const std::string& filename, const CalibrationResult& result) const

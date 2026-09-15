@@ -51,12 +51,12 @@ AppProjectConfig AppConfigService::load() const
     // 组织名和应用名固定为 HTMSR，Windows 下会保存到注册表或 Qt 默认配置位置。
     QSettings settings("HTMSR", "HTMSR");
     AppProjectConfig config;
-    config.leftCalibrationDirectory = readString(settings, "paths/leftCalibration");
-    config.rightCalibrationDirectory = readString(settings, "paths/rightCalibration");
+    config.leftCalibrationDirectory.clear();
+    config.rightCalibrationDirectory.clear();
     config.leftReconstructionDirectory = readString(settings, "paths/leftReconstruction");
     config.rightReconstructionDirectory = readString(settings, "paths/rightReconstruction");
-    config.calibrationFile = readString(settings, "paths/calibrationFile", "stereo_calibration.yml");
-    config.outputDirectory = readString(settings, "paths/outputDirectory", ".");
+    config.calibrationFile.clear();
+    config.outputDirectory = readString(settings, "paths/outputDirectory", "output");
     config.calibrationInput.leftDirectory = config.leftCalibrationDirectory;
     config.calibrationInput.rightDirectory = config.rightCalibrationDirectory;
     config.calibrationInput.outputFile = config.calibrationFile;
@@ -114,12 +114,13 @@ AppProjectConfig AppConfigService::load() const
 void AppConfigService::save(const AppProjectConfig& config) const
 {
     // 保存路径、标定参数和重建参数，便于下次启动直接恢复工作现场。
+    // 标定输入/输出路径每次启动保持为空，只在用户手动选择或在线采集后回填。
     QSettings settings("HTMSR", "HTMSR");
-    writeString(settings, "paths/leftCalibration", config.leftCalibrationDirectory);
-    writeString(settings, "paths/rightCalibration", config.rightCalibrationDirectory);
+    settings.remove("paths/leftCalibration");
+    settings.remove("paths/rightCalibration");
     writeString(settings, "paths/leftReconstruction", config.leftReconstructionDirectory);
     writeString(settings, "paths/rightReconstruction", config.rightReconstructionDirectory);
-    writeString(settings, "paths/calibrationFile", config.calibrationFile);
+    settings.remove("paths/calibrationFile");
     writeString(settings, "paths/outputDirectory", config.outputDirectory);
     settings.setValue("calibration/boardWidth", config.calibrationInput.boardSize.width);
     settings.setValue("calibration/boardHeight", config.calibrationInput.boardSize.height);

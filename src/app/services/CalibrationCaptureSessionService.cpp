@@ -15,6 +15,8 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 
@@ -35,10 +37,11 @@ void ensureDirectory(const QString& directory)
 AcquisitionSessionResult createSession(const std::string& outputDirectory)
 {
     const QString root = QString::fromStdString(outputDirectory.empty() ? "." : outputDirectory);
-    ensureDirectory(root);
+    const QString captureRoot = QDir(root).filePath("calibration/capture");
+    ensureDirectory(captureRoot);
 
     const QString sessionName = "calibration_capture_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    const QString sessionDirectory = QDir(root).filePath(sessionName);
+    const QString sessionDirectory = QDir(captureRoot).filePath(sessionName);
     ensureDirectory(sessionDirectory);
     ensureDirectory(QDir(sessionDirectory).filePath("left"));
     ensureDirectory(QDir(sessionDirectory).filePath("right"));
@@ -74,7 +77,9 @@ struct CalibrationCaptureSessionService::Impl {
     AcquisitionSessionResult result;
     bool active = false;
     int nextFrameIndex = 0;
+    std::mutex mutex;
     AcquisitionProviderPtr mockProvider;
+    AcquisitionProviderPtr mockPreviewProvider;
 #if HTMSR_WITH_HIK_CAMERA
     CameraDevicePtr leftDevice;
     CameraDevicePtr rightDevice;
@@ -95,6 +100,7 @@ CalibrationCaptureSessionState CalibrationCaptureSessionService::start(const Ste
 {
     finish();
 
+    std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->config = config;
     impl_->config.frameCount = std::max(1, config.frameCount);
     impl_->config.leftParameters.useHardwareTrigger = false;
@@ -104,6 +110,7 @@ CalibrationCaptureSessionState CalibrationCaptureSessionService::start(const Ste
 
     if (impl_->config.useMockProvider) {
         impl_->mockProvider = std::make_unique<MockAcquisitionProvider>(impl_->config.frameCount);
+        impl_->mockPreviewProvider = std::make_unique<MockAcquisitionProvider>(std::numeric_limits<int>::max());
         Logger::instance().info("CalibrationCapture", "Started mock calibration capture session: " + impl_->result.sessionDirectory);
     } else {
 #if HTMSR_WITH_HIK_CAMERA
@@ -147,6 +154,7 @@ AcquisitionSessionResult CalibrationCaptureSessionService::captureCurrentFrame()
         throw std::runtime_error("Calibration capture session is not active.");
     }
 
+    std::lock_guard<std::mutex> lock(impl_->mutex);
     FramePair pair;
     pair.frameIndex = impl_->nextFrameIndex;
     if (impl_->config.useMockProvider) {
@@ -188,12 +196,35 @@ AcquisitionSessionResult CalibrationCaptureSessionService::captureCurrentFrame()
     return impl_->result;
 }
 
+FramePair CalibrationCaptureSessionService::grabPreviewFrame()
+{
+    if (!impl_ || !impl_->active) {
+        return {};
+    }
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    FramePair pair;
+    if (impl_->config.useMockProvider) {
+        if (!impl_->mockPreviewProvider) {
+            impl_->mockPreviewProvider = std::make_unique<MockAcquisitionProvider>(std::numeric_limits<int>::max());
+        }
+        pair = impl_->mockPreviewProvider->next();
+    } else {
+#if HTMSR_WITH_HIK_CAMERA
+        pair.left = impl_->leftDevice ? impl_->leftDevice->grabFrame(impl_->config.leftParameters.grabTimeoutMs) : cv::Mat{};
+        pair.right = impl_->rightDevice ? impl_->rightDevice->grabFrame(impl_->config.rightParameters.grabTimeoutMs) : cv::Mat{};
+#endif
+    }
+    return pair;
+}
+
 void CalibrationCaptureSessionService::finish()
 {
     if (!impl_) {
         return;
     }
 
+    std::lock_guard<std::mutex> lock(impl_->mutex);
 #if HTMSR_WITH_HIK_CAMERA
     if (impl_->leftDevice) {
         impl_->leftDevice->stopGrabbing();
@@ -207,6 +238,7 @@ void CalibrationCaptureSessionService::finish()
     }
 #endif
     impl_->mockProvider.reset();
+    impl_->mockPreviewProvider.reset();
     if (impl_->active) {
         Logger::instance().info("CalibrationCapture", "Calibration capture session finished.");
     }
@@ -220,7 +252,25 @@ bool CalibrationCaptureSessionService::isActive() const
 
 AcquisitionSessionResult CalibrationCaptureSessionService::currentResult() const
 {
+    if (!impl_) {
+        return {};
+    }
+    std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_ ? impl_->result : AcquisitionSessionResult{};
+}
+
+void CalibrationCaptureSessionService::setCurrentResult(const AcquisitionSessionResult& result)
+{
+    if (!impl_) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->result = result;
+    impl_->result.capturedFrameCount = static_cast<int>(std::min(
+        impl_->result.leftImagePaths.size(),
+        impl_->result.rightImagePaths.size()));
+    impl_->result.success = impl_->active || impl_->result.capturedFrameCount > 0;
 }
 
 } // namespace htmsr::app

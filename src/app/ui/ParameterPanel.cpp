@@ -45,7 +45,7 @@ ParameterPanel::ParameterPanel(QWidget* parent)
     outputDirectoryEdit_ = createPathRow(projectLayout, QString::fromUtf8("输出目录"), true);
     tabs->addTab(projectPage, QString::fromUtf8("项目"));
 
-    // 标定页：维护棋盘格规格、方格实际尺寸和图像处理范围。
+    // 标定页：维护棋盘格规格和方格实际尺寸。
     auto* calibrationPage = new QWidget;
     auto* calibrationLayout = new QFormLayout(calibrationPage);
     boardWidthSpin_ = new QSpinBox;
@@ -60,18 +60,10 @@ ParameterPanel::ParameterPanel(QWidget* parent)
     squareHeightSpin_ = new QDoubleSpinBox;
     squareHeightSpin_->setRange(0.001, 10000.0);
     squareHeightSpin_->setValue(15.0);
-    imageBeginSpin_ = new QSpinBox;
-    imageBeginSpin_->setRange(-1, 100000);
-    imageBeginSpin_->setValue(-1);
-    imageEndSpin_ = new QSpinBox;
-    imageEndSpin_->setRange(-1, 100000);
-    imageEndSpin_->setValue(-1);
     calibrationLayout->addRow(QString::fromUtf8("棋盘宽"), boardWidthSpin_);
     calibrationLayout->addRow(QString::fromUtf8("棋盘高"), boardHeightSpin_);
     calibrationLayout->addRow(QString::fromUtf8("方格宽"), squareWidthSpin_);
     calibrationLayout->addRow(QString::fromUtf8("方格高"), squareHeightSpin_);
-    calibrationLayout->addRow(QString::fromUtf8("起始索引"), imageBeginSpin_);
-    calibrationLayout->addRow(QString::fromUtf8("结束索引"), imageEndSpin_);
     tabs->addTab(calibrationPage, QString::fromUtf8("标定"));
 
     // 重建页：维护激光中心线提取、ROI 和左右匹配相关参数。
@@ -151,8 +143,6 @@ void ParameterPanel::setProjectConfig(const AppProjectConfig& config)
     boardHeightSpin_->setValue(config.calibrationInput.boardSize.height);
     squareWidthSpin_->setValue(config.calibrationInput.squareSize.width);
     squareHeightSpin_->setValue(config.calibrationInput.squareSize.height);
-    imageBeginSpin_->setValue(config.calibrationInput.imageRange.begin);
-    imageEndSpin_->setValue(config.calibrationInput.imageRange.end);
     laserModeCombo_->setCurrentIndex(config.laserConfig.mode == LaserExtractionMode::Steger ? 1 : 0);
     const int colorIndex = config.laserConfig.laserColor == LaserColor::Blue ? 0
         : config.laserConfig.laserColor == LaserColor::Green ? 1
@@ -218,7 +208,7 @@ CalibrationInput ParameterPanel::calibrationInput() const
     input.rightDirectory = textOf(rightCalibrationEdit_);
     input.boardSize = cv::Size(boardWidthSpin_->value(), boardHeightSpin_->value());
     input.squareSize = cv::Size2d(squareWidthSpin_->value(), squareHeightSpin_->value());
-    input.imageRange = { imageBeginSpin_->value(), imageEndSpin_->value() };
+    input.imageRange = { -1, -1 };
     input.outputFile = textOf(calibrationFileEdit_);
     return input;
 }
@@ -229,7 +219,7 @@ ReconstructionInput ParameterPanel::reconstructionInput(const CalibrationResult&
     ReconstructionInput input;
     input.leftDirectory = textOf(leftReconstructionEdit_);
     input.rightDirectory = textOf(rightReconstructionEdit_);
-    input.imageRange = { imageBeginSpin_->value(), imageEndSpin_->value() };
+    input.imageRange = { -1, -1 };
     input.calibration = calibration;
     input.laserConfig.mode = laserModeCombo_->currentIndex() == 1 ? LaserExtractionMode::Steger : LaserExtractionMode::GrayCentroid;
     input.laserConfig.laserColor = static_cast<LaserColor>(laserColorCombo_->currentIndex() == 0 ? 2 : laserColorCombo_->currentIndex() == 1 ? 1 : laserColorCombo_->currentIndex() == 2 ? 0 : 3);

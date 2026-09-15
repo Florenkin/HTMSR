@@ -44,10 +44,11 @@ void ensureDirectory(const QString& directory)
 QString createSessionDirectory(const std::string& outputDirectory)
 {
     const QString root = QString::fromStdString(outputDirectory.empty() ? "." : outputDirectory);
-    ensureDirectory(root);
+    const QString captureRoot = QDir(root).filePath("calibration/capture");
+    ensureDirectory(captureRoot);
 
-    const QString sessionName = "capture_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    const QString sessionDirectory = QDir(root).filePath(sessionName);
+    const QString sessionName = "calibration_capture_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    const QString sessionDirectory = QDir(captureRoot).filePath(sessionName);
     ensureDirectory(sessionDirectory);
     ensureDirectory(QDir(sessionDirectory).filePath("left"));
     ensureDirectory(QDir(sessionDirectory).filePath("right"));

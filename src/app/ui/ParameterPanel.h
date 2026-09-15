@@ -71,7 +71,7 @@ public:
         输入：
             无
         输出：
-            返回值：标定目录、棋盘格参数、图像范围和输出文件路径
+            返回值：标定目录、棋盘格参数和输出文件路径
     */
     CalibrationInput calibrationInput() const;
 
@@ -100,8 +100,6 @@ private:
     QSpinBox* boardHeightSpin_ = nullptr;
     QDoubleSpinBox* squareWidthSpin_ = nullptr;
     QDoubleSpinBox* squareHeightSpin_ = nullptr;
-    QSpinBox* imageBeginSpin_ = nullptr;
-    QSpinBox* imageEndSpin_ = nullptr;
 
     QComboBox* laserModeCombo_ = nullptr;
     QComboBox* laserColorCombo_ = nullptr;

@@ -293,11 +293,14 @@ set(HTMSR_APP_SOURCES
     src/app/services/QtLogSink.cpp
     src/app/services/ReconstructionCaptureSessionService.cpp
     src/app/ui/AcquisitionPanel.cpp
+    src/app/ui/CaptureReviewWidget.cpp
     src/app/ui/ImageViewWidget.cpp
     src/app/ui/LogPanel.cpp
     src/app/ui/MainWindow.cpp
     src/app/ui/ParameterPanel.cpp
     src/app/ui/PointCloudViewWidget.cpp
+    src/app/ui/SerialCommandPackWidget.cpp
+    src/app/ui/ZoomableImageView.cpp
 )
 
 if(HTMSR_ENABLE_HIK_CAMERA)

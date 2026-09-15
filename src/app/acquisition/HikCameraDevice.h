@@ -26,6 +26,9 @@ public:
     cv::Mat grabFrame(int timeoutMs) override;
     void disconnect() override;
 
+    // 最近一次配置失败的具体原因；供采集工作流把 SDK 的节点和错误码直接显示给用户。
+    std::string lastError() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

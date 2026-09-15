@@ -140,6 +140,8 @@ struct ReconstructionResult {
     std::vector<Eigen::Vector3d> mergedPoints;
     std::string txtPath;
     std::string pcdPath;
+    bool success = true;
+    std::string message;
 };
 
 // 软件工程配置，用于 UI 参数持久化和默认参数恢复。
@@ -149,7 +151,7 @@ struct AppProjectConfig {
     std::string leftReconstructionDirectory;
     std::string rightReconstructionDirectory;
     std::string calibrationFile = "stereo_calibration.yml";
-    std::string outputDirectory = ".";
+    std::string outputDirectory = "output";
     CalibrationInput calibrationInput;
     LaserExtractionConfig laserConfig;
     double matchDistanceThreshold = 0.5;

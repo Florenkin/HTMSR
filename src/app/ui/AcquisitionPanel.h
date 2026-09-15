@@ -2,13 +2,17 @@
 
 #include "app/acquisition/AcquisitionTypes.h"
 
+#include <QString>
+#include <QStringList>
 #include <QWidget>
 
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QEvent;
 class QFormLayout;
 class QLineEdit;
+class QObject;
 class QPushButton;
 class QSpinBox;
 
@@ -67,11 +71,15 @@ public:
     void setStatusText(const QString& text);
     // 更新工作流结果摘要。
     void setResultSummary(const QString& text);
+    QWidget* rawGalvoCommandWidget() const;
     void setCalibrationCaptureState(bool active, int capturedFrameCount);
     void setReconstructionCaptureReady(bool ready);
+    // 重建前回读设备角度后，刷新显示并以实际角度计算采集帧数。
+    void setFrameCountFromDevice(double stepAngleDeg, int totalRotationAngleDeg);
 
 signals:
     void refreshDevicesRequested();
+    void offlineCalibrationRequested();
     void startCalibrationCaptureRequested();
     void captureCalibrationFrameRequested();
     void calibrateCapturedFramesRequested();
@@ -80,26 +88,35 @@ signals:
     void finishCalibrationCaptureRequested();
     void startReconstructionCaptureRequested();
     void reconstructCapturedFramesRequested();
-    void returnGalvoCenterRequested();
     void sendRawGalvoCommandRequested(const QString& commandText);
+    void cameraConfigChanged();
     void galvoConfigChanged();
+    void galvoMotionParametersChanged();
+
+protected:
+    // 在相机指令输入框中拦截上下键，实现当前窗口内的历史命令浏览。
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     QLineEdit* createPathRow(QFormLayout* form, const QString& label, bool directory);
     QSpinBox* createSpinRow(int min, int max, int value);
     QDoubleSpinBox* createDoubleSpinRow(double min, double max, double value);
     void updateActionButtons();
+    void rememberRawGalvoCommand();
+    void navigateRawGalvoCommandHistory(int direction);
+    void resetRawGalvoCommandHistoryNavigation();
+    void updateDerivedFrameCount();
 
     QComboBox* leftDeviceCombo_ = nullptr;
     QComboBox* rightDeviceCombo_ = nullptr;
-    QCheckBox* useMockProviderCheck_ = nullptr;
-    QSpinBox* frameCountSpin_ = nullptr;
+    QLineEdit* galvoDeviceEdit_ = nullptr;
+    QComboBox* reconstructionCaptureModeCombo_ = nullptr;
+    QSpinBox* triggerLineSpin_ = nullptr;
+    QLineEdit* frameCountEdit_ = nullptr;
+    int derivedFrameCount_ = 1000;
     QLineEdit* outputDirectoryEdit_ = nullptr;
     QDoubleSpinBox* exposureTimeSpin_ = nullptr;
     QDoubleSpinBox* gainSpin_ = nullptr;
-    QCheckBox* hardwareTriggerCheck_ = nullptr;
-    QSpinBox* triggerLineSpin_ = nullptr;
-    QSpinBox* timeoutSpin_ = nullptr;
     QLineEdit* leftCalibrationEdit_ = nullptr;
     QLineEdit* rightCalibrationEdit_ = nullptr;
     QLineEdit* leftReconstructionEdit_ = nullptr;
@@ -109,27 +126,19 @@ private:
     QSpinBox* boardHeightSpin_ = nullptr;
     QDoubleSpinBox* squareWidthSpin_ = nullptr;
     QDoubleSpinBox* squareHeightSpin_ = nullptr;
-    QSpinBox* imageBeginSpin_ = nullptr;
-    QSpinBox* imageEndSpin_ = nullptr;
-
     QLineEdit* galvoPortEdit_ = nullptr;
-    QSpinBox* galvoBaudRateSpin_ = nullptr;
-    QSpinBox* galvoCommandTimeoutSpin_ = nullptr;
-    QComboBox* galvoSyncModeCombo_ = nullptr;
-    QComboBox* galvoDirectionCombo_ = nullptr;
-    QSpinBox* galvoCaptureIntervalSpin_ = nullptr;
-    QSpinBox* galvoContinuousWaitSpin_ = nullptr;
     QDoubleSpinBox* galvoTotalRotationAngleSpin_ = nullptr;
     QDoubleSpinBox* galvoStepAngleSpin_ = nullptr;
-    QSpinBox* galvoAutoRotationAngleSpin_ = nullptr;
     QSpinBox* galvoForwardSpeedSpin_ = nullptr;
     QSpinBox* galvoReverseSpeedSpin_ = nullptr;
     QSpinBox* galvoLaserDutySpin_ = nullptr;
-    QPushButton* galvoCenterButton_ = nullptr;
     QLineEdit* rawGalvoCommandEdit_ = nullptr;
     QPushButton* rawGalvoCommandButton_ = nullptr;
-    QDoubleSpinBox* galvoVoltageRangeSpin_ = nullptr;
-    QCheckBox* forceRecalibrationCheck_ = nullptr;
+    QWidget* rawGalvoCommandWidget_ = nullptr;
+    QStringList rawGalvoCommandHistory_;
+    QString rawGalvoCommandDraft_;
+    int rawGalvoCommandHistoryIndex_ = 0;
+    bool rawGalvoCommandHistoryBrowsing_ = false;
     QComboBox* laserModeCombo_ = nullptr;
     QComboBox* laserColorCombo_ = nullptr;
     QSpinBox* leftRoiXSpin_ = nullptr;
@@ -149,9 +158,8 @@ private:
     QCheckBox* removeEndpointsCheck_ = nullptr;
     QSpinBox* removeEndpointCountSpin_ = nullptr;
 
-    QLineEdit* statusEdit_ = nullptr;
-    QLineEdit* summaryEdit_ = nullptr;
     QPushButton* refreshButton_ = nullptr;
+    QPushButton* offlineCalibrationButton_ = nullptr;
     QPushButton* startCalibrationCaptureButton_ = nullptr;
     QPushButton* captureCalibrationFrameButton_ = nullptr;
     QPushButton* calibrateCapturedFramesButton_ = nullptr;

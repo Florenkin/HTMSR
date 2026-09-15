@@ -27,8 +27,18 @@ std::string cString(const unsigned char* value)
 std::string errorText(int code)
 {
     std::ostringstream stream;
-    stream << "0x" << std::hex << std::uppercase << code;
+    stream << "0x" << std::hex << std::uppercase << static_cast<unsigned int>(code);
+    if (static_cast<unsigned int>(code) == 0x80000007U) {
+        stream << " (No data/trigger timeout)";
+    } else if (static_cast<unsigned int>(code) == 0x80000106U) {
+        stream << " (GenICam node access condition)";
+    }
     return stream.str();
+}
+
+std::string triggerSourceName(int line)
+{
+    return "Line" + std::to_string(line);
 }
 
 // 从海康 SDK 设备结构中提取公共设备信息，避免 UI 层依赖 SDK 私有类型。
@@ -133,6 +143,8 @@ struct HikCameraDevice::Impl {
     CameraState state = CameraState::Disconnected;
     void* handle = nullptr;
     std::vector<unsigned char> frameBuffer;
+    bool hardwareTriggerConfigured = false;
+    std::string lastError;
 };
 
 /*
@@ -244,16 +256,20 @@ bool HikCameraDevice::connect()
     输入：
         config：单相机采集参数配置
     输出：
-        返回值：函数执行完成返回 true；不支持的节点仅记录 Warning，不中断流程
+    返回值：非关键节点失败时仍可返回 true；触发模式或触发源配置失败时返回 false
 */
 bool HikCameraDevice::configure(const CameraParameterConfig& config)
 {
     if (!impl_->handle) {
-        Logger::instance().error("HikCamera", "Configure failed because device is not connected, id=" + impl_->info.id);
+        impl_->lastError = "Camera is not connected, id=" + impl_->info.id;
+        Logger::instance().error("HikCamera", "Configure failed because " + impl_->lastError);
         return false;
     }
+    impl_->hardwareTriggerConfigured = false;
+    impl_->lastError.clear();
 
-    // 首版只写入通用 GenICam 节点；某些型号不支持时记录 Warning，但不直接中断连接流程。
+    // 首版只写入通用 GenICam 节点；曝光、增益等非关键节点失败时记录 Warning，
+    // 但触发模式和触发源属于硬触发采集的必要条件，配置失败必须中止本次相机配置。
     int code = MV_CC_SetFloatValue(impl_->handle, "ExposureTime", static_cast<float>(config.exposureTime));
     if (code != MV_OK) {
         Logger::instance().warning("HikCamera", "Set ExposureTime failed, id=" + impl_->info.id + ", code=" + errorText(code));
@@ -263,17 +279,46 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
         Logger::instance().warning("HikCamera", "Set Gain failed, id=" + impl_->info.id + ", code=" + errorText(code));
     }
 
-    code = MV_CC_SetEnumValue(impl_->handle, "TriggerMode", config.useHardwareTrigger ? MV_TRIGGER_MODE_ON : MV_TRIGGER_MODE_OFF);
-    if (code != MV_OK) {
-        Logger::instance().warning("HikCamera", "Set TriggerMode failed, id=" + impl_->info.id + ", code=" + errorText(code));
-    }
+    const auto failTriggerConfiguration = [this](const std::string& message) {
+        impl_->lastError = message + ", id=" + impl_->info.id;
+        Logger::instance().error("HikCamera", impl_->lastError);
+        return false;
+    };
 
-    const unsigned int triggerSource = config.useHardwareTrigger
-        ? static_cast<unsigned int>(MV_TRIGGER_SOURCE_LINE0 + std::max(0, config.triggerSourceLine))
-        : static_cast<unsigned int>(MV_TRIGGER_SOURCE_SOFTWARE);
-    code = MV_CC_SetEnumValue(impl_->handle, "TriggerSource", triggerSource);
-    if (code != MV_OK) {
-        Logger::instance().warning("HikCamera", "Set TriggerSource failed, id=" + impl_->info.id + ", code=" + errorText(code));
+    if (!config.useHardwareTrigger) {
+        // 软件同步测试使用自由取流。无需设置 TriggerSource=Software；部分机型仅在触发开启后允许写该节点。
+        code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerMode", "Off");
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set TriggerMode=Off for free-run capture, code=" + errorText(code));
+        }
+        Logger::instance().info("HikCamera", "Free-run capture configured, id=" + impl_->info.id);
+    } else {
+        if (config.triggerSourceLine < 0) {
+            return failTriggerConfiguration("Hardware trigger line must be non-negative");
+        }
+
+        // MVS 官方 IO 示例要求先开启触发，再设置触发源和触发沿。先关闭触发会导致部分 USB3 相机
+        // 的 TriggerSource 节点不可写并返回 MV_E_GC_ACCESS (0x80000106)。字符串设置也能明确暴露不支持的 LineX。
+        code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerMode", "On");
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set TriggerMode=On, code=" + errorText(code));
+        }
+
+        const std::string source = triggerSourceName(config.triggerSourceLine);
+        code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerSource", source.c_str());
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set TriggerSource=" + source + ", code=" + errorText(code));
+        }
+
+        code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerActivation", "RisingEdge");
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set TriggerActivation=RisingEdge, code=" + errorText(code));
+        }
+
+        impl_->hardwareTriggerConfigured = true;
+        Logger::instance().info(
+            "HikCamera",
+            "Hardware trigger configured: source=" + source + ", activation=RisingEdge, id=" + impl_->info.id);
     }
 
     MVCC_INTVALUE_EX payloadSize{};
@@ -285,6 +330,11 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
     }
 
     return true;
+}
+
+std::string HikCameraDevice::lastError() const
+{
+    return impl_ ? impl_->lastError : "Camera implementation is unavailable.";
 }
 
 /*
@@ -308,6 +358,13 @@ bool HikCameraDevice::startGrabbing()
     }
 
     impl_->state = CameraState::Streaming;
+    if (impl_->hardwareTriggerConfigured) {
+        // 在取流已经启动后清掉连续预览遗留帧，避免首帧被旧缓存占用。
+        const int clearCode = MV_CC_ClearImageBuffer(impl_->handle);
+        if (clearCode != MV_OK) {
+            Logger::instance().warning("HikCamera", "MV_CC_ClearImageBuffer failed, id=" + impl_->info.id + ", code=" + errorText(clearCode));
+        }
+    }
     return true;
 }
 

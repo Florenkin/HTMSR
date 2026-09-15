@@ -99,6 +99,17 @@ std::string formatFrameDiagnostics(int frameIndex, const FrameReconstructionResu
     return stream.str();
 }
 
+bool shouldLogFrameDiagnostics(int frameIndex, int frameCount, const FrameReconstructionResult& frame)
+{
+    if (frame.diagnostics.failureReason != "ok") {
+        return true;
+    }
+    if (frameCount <= 200) {
+        return true;
+    }
+    return frameIndex <= 10 || frameIndex == frameCount || frameIndex % 50 == 0;
+}
+
 } // namespace
 
 ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInput& input) const
@@ -123,36 +134,54 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
     ReconstructionResult result;
     result.frames.reserve(pairCount);
 
-    // 对每一对左右图像独立执行一次三维重建。
+    // 对每一对左右图像独立执行一次三维重建，点云直接追加到总结果，避免大批量帧时重复占用内存。
     for (int i = 0; i < pairCount; ++i) {
-        cv::Mat left = cv::imread(leftPaths[i], cv::IMREAD_COLOR);
-        cv::Mat right = cv::imread(rightPaths[i], cv::IMREAD_COLOR);
-        if (left.empty() || right.empty()) {
-            Logger::instance().warning("Reconstruction", "Skipping unreadable image pair index " + std::to_string(i));
-            continue;
+        try {
+            cv::Mat left = cv::imread(leftPaths[i], cv::IMREAD_COLOR);
+            cv::Mat right = cv::imread(rightPaths[i], cv::IMREAD_COLOR);
+            if (left.empty() || right.empty()) {
+                Logger::instance().warning("Reconstruction", "Skipping unreadable image pair index " + std::to_string(i));
+                continue;
+            }
+
+            FrameReconstructionResult frame;
+            frame.leftImagePath = leftPaths[i];
+            frame.rightImagePath = rightPaths[i];
+            frame.points = reconstructFrame(
+                left,
+                right,
+                input.calibration,
+                input.laserConfig,
+                input.matchDistanceThreshold,
+                frame.leftLinePreview,
+                frame.rightLinePreview,
+                frame.diagnostics);
+
+            if (shouldLogFrameDiagnostics(i + 1, pairCount, frame)) {
+                Logger::instance().info("Reconstruction", formatFrameDiagnostics(i + 1, frame));
+            }
+            result.mergedPoints.insert(result.mergedPoints.end(), frame.points.begin(), frame.points.end());
+            frame.points.clear();
+            frame.points.shrink_to_fit();
+            frame.leftLinePreview.release();
+            frame.rightLinePreview.release();
+            result.frames.push_back(std::move(frame));
+        } catch (const cv::Exception& ex) {
+            Logger::instance().warning(
+                "Reconstruction",
+                "Skipping reconstruction image pair index " + std::to_string(i) + " because OpenCV reported: " + ex.what());
+        } catch (const std::exception& ex) {
+            Logger::instance().warning(
+                "Reconstruction",
+                "Skipping reconstruction image pair index " + std::to_string(i) + " because: " + ex.what());
         }
-
-        FrameReconstructionResult frame;
-        frame.leftImagePath = leftPaths[i];
-        frame.rightImagePath = rightPaths[i];
-        frame.points = reconstructFrame(
-            left,
-            right,
-            input.calibration,
-            input.laserConfig,
-            input.matchDistanceThreshold,
-            frame.leftLinePreview,
-            frame.rightLinePreview,
-            frame.diagnostics);
-
-        Logger::instance().info("Reconstruction", formatFrameDiagnostics(i + 1, frame));
-        result.frames.push_back(std::move(frame));
     }
 
-    PointCloudService pointCloudService;
-    // 将逐帧点集合并成一个点云，便于 UI 显示和统一导出。
-    result.mergedPoints = pointCloudService.mergeFrames(result.frames);
-    Logger::instance().info("Reconstruction", "Batch reconstruction finished. Total points=" + std::to_string(result.mergedPoints.size()));
+    result.success = !result.mergedPoints.empty();
+    result.message = result.success
+        ? "Batch reconstruction finished. Total points=" + std::to_string(result.mergedPoints.size())
+        : "Reconstruction finished without valid points. Check calibration, ROI, laser threshold, and captured image quality.";
+    Logger::instance().info("Reconstruction", result.message);
     return result;
 }
 

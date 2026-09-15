@@ -1,54 +1,41 @@
-#include "app/ui/ImageViewWidget.h"
+#include "app/ui/ZoomableImageView.h"
 
 #include <QColor>
-#include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QSizeF>
 #include <QWheelEvent>
 
-#include <opencv2/imgproc.hpp>
-
 #include <algorithm>
 
 namespace htmsr::app {
 
-ImageViewWidget::ImageViewWidget(QWidget* parent)
+ZoomableImageView::ZoomableImageView(QWidget* parent)
     : QWidget(parent)
 {
-    setMinimumSize(320, 240);
+    setMinimumSize(480, 360);
     setMouseTracking(true);
     setFocusPolicy(Qt::WheelFocus);
 }
 
-void ImageViewWidget::setImage(const cv::Mat& image)
+void ZoomableImageView::setImageFile(const QString& imagePath)
 {
-    if (image.empty()) {
-        clear();
-        return;
-    }
-
-    const QImage qImage = toQImage(image);
-    const bool shouldFit = image_.isNull() || image_.size() != qImage.size();
-    image_ = qImage;
-
-    if (shouldFit) {
-        fitToView();
-    } else {
-        update();
-    }
+    imagePath_ = imagePath;
+    image_ = QImage(imagePath);
+    fitToView();
 }
 
-void ImageViewWidget::clear()
+void ZoomableImageView::clear()
 {
+    imagePath_.clear();
     image_ = QImage();
     scale_ = 1.0;
     offset_ = QPointF();
     update();
 }
 
-void ImageViewWidget::fitToView()
+void ZoomableImageView::fitToView()
 {
     offset_ = QPointF();
     if (image_.isNull() || width() <= 0 || height() <= 0) {
@@ -63,7 +50,7 @@ void ImageViewWidget::fitToView()
     update();
 }
 
-void ImageViewWidget::paintEvent(QPaintEvent*)
+void ZoomableImageView::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);
     painter.fillRect(rect(), QColor(245, 245, 245));
@@ -78,7 +65,7 @@ void ImageViewWidget::paintEvent(QPaintEvent*)
     painter.drawImage(imageRect(), image_, QRectF(QPointF(0.0, 0.0), QSizeF(image_.size())));
 }
 
-void ImageViewWidget::resizeEvent(QResizeEvent* event)
+void ZoomableImageView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     if (!image_.isNull()) {
@@ -86,7 +73,7 @@ void ImageViewWidget::resizeEvent(QResizeEvent* event)
     }
 }
 
-void ImageViewWidget::wheelEvent(QWheelEvent* event)
+void ZoomableImageView::wheelEvent(QWheelEvent* event)
 {
     if (image_.isNull()) {
         return;
@@ -107,7 +94,7 @@ void ImageViewWidget::wheelEvent(QWheelEvent* event)
     event->accept();
 }
 
-void ImageViewWidget::mousePressEvent(QMouseEvent* event)
+void ZoomableImageView::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton && !image_.isNull()) {
         panning_ = true;
@@ -117,7 +104,7 @@ void ImageViewWidget::mousePressEvent(QMouseEvent* event)
     }
 }
 
-void ImageViewWidget::mouseMoveEvent(QMouseEvent* event)
+void ZoomableImageView::mouseMoveEvent(QMouseEvent* event)
 {
     if (!panning_) {
         return;
@@ -129,7 +116,7 @@ void ImageViewWidget::mouseMoveEvent(QMouseEvent* event)
     event->accept();
 }
 
-void ImageViewWidget::mouseReleaseEvent(QMouseEvent* event)
+void ZoomableImageView::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
         panning_ = false;
@@ -138,7 +125,7 @@ void ImageViewWidget::mouseReleaseEvent(QMouseEvent* event)
     }
 }
 
-void ImageViewWidget::mouseDoubleClickEvent(QMouseEvent* event)
+void ZoomableImageView::mouseDoubleClickEvent(QMouseEvent* event)
 {
     if (!image_.isNull() && event->button() == Qt::LeftButton) {
         fitToView();
@@ -146,30 +133,12 @@ void ImageViewWidget::mouseDoubleClickEvent(QMouseEvent* event)
     }
 }
 
-QImage ImageViewWidget::toQImage(const cv::Mat& image) const
-{
-    // Qt 使用 RGB 顺序，OpenCV 彩色图默认是 BGR，需要在这里转换。
-    cv::Mat converted;
-    if (image.channels() == 1) {
-        cv::cvtColor(image, converted, cv::COLOR_GRAY2RGB);
-    } else {
-        cv::cvtColor(image, converted, cv::COLOR_BGR2RGB);
-    }
-
-    return QImage(
-        converted.data,
-        converted.cols,
-        converted.rows,
-        static_cast<int>(converted.step),
-        QImage::Format_RGB888).copy();
-}
-
-QPointF ImageViewWidget::viewportCenter() const
+QPointF ZoomableImageView::viewportCenter() const
 {
     return QPointF(width() * 0.5, height() * 0.5);
 }
 
-QRectF ImageViewWidget::imageRect() const
+QRectF ZoomableImageView::imageRect() const
 {
     if (image_.isNull()) {
         return QRectF();

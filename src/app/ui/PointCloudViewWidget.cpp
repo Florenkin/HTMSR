@@ -27,6 +27,26 @@
 namespace htmsr::app {
 namespace {
 
+constexpr size_t kMaxDisplayPointCount = 300000;
+
+std::vector<Eigen::Vector3d> samplePointsForDisplay(const std::vector<Eigen::Vector3d>& points)
+{
+    if (points.size() <= kMaxDisplayPointCount) {
+        return points;
+    }
+
+    std::vector<Eigen::Vector3d> sampled;
+    sampled.reserve(kMaxDisplayPointCount);
+    const double step = static_cast<double>(points.size()) / static_cast<double>(kMaxDisplayPointCount);
+    for (size_t i = 0; i < kMaxDisplayPointCount; ++i) {
+        const size_t sourceIndex = std::min(
+            static_cast<size_t>(static_cast<double>(i) * step),
+            points.size() - 1);
+        sampled.push_back(points[sourceIndex]);
+    }
+    return sampled;
+}
+
 #if !HTMSR_WITH_VTK_VIEWER
 class QtPointCloudCanvas final : public QWidget {
 public:
@@ -39,7 +59,8 @@ public:
 
     void setPoints(const std::vector<Eigen::Vector3d>& newPoints)
     {
-        points_ = newPoints;
+        totalPointCount_ = newPoints.size();
+        points_ = samplePointsForDisplay(newPoints);
         updateBounds();
         update();
     }
@@ -47,6 +68,7 @@ public:
     void clear()
     {
         points_.clear();
+        totalPointCount_ = 0;
         updateBounds();
         update();
     }
@@ -114,7 +136,8 @@ protected:
         painter.drawText(
             12,
             22,
-            QString::fromUtf8("点云数量: %1 | 左键旋转，滚轮缩放，右键平移，双击复位")
+            QString::fromUtf8("点云数量: %1 | 显示: %2 | 左键旋转，滚轮缩放，右键平移，双击复位")
+                .arg(static_cast<qulonglong>(totalPointCount_))
                 .arg(static_cast<qulonglong>(points_.size())));
     }
 
@@ -193,6 +216,7 @@ private:
     }
 
     std::vector<Eigen::Vector3d> points_;
+    size_t totalPointCount_ = 0;
     Eigen::Vector3d center_ = Eigen::Vector3d::Zero();
     double baseScale_ = 1.0;
     double yaw_ = -0.6;
@@ -290,10 +314,11 @@ PointCloudViewWidget::~PointCloudViewWidget()
 void PointCloudViewWidget::setPoints(const std::vector<Eigen::Vector3d>& points)
 {
 #if HTMSR_WITH_VTK_VIEWER
+    const auto displayPoints = samplePointsForDisplay(points);
     auto newPoints = vtkSmartPointer<vtkPoints>::New();
     newPoints->SetDataTypeToFloat();
-    newPoints->Allocate(static_cast<vtkIdType>(points.size()));
-    for (const auto& point : points) {
+    newPoints->Allocate(static_cast<vtkIdType>(displayPoints.size()));
+    for (const auto& point : displayPoints) {
         newPoints->InsertNextPoint(
             static_cast<float>(point.x()),
             static_cast<float>(point.y()),

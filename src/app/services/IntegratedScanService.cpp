@@ -22,6 +22,9 @@
 namespace htmsr::app {
 namespace {
 
+constexpr int kHardwareTriggerTimeoutMs = 3000;
+constexpr int kMaxConsecutiveTriggerTimeouts = 3;
+
 void ensureDirectory(const QString& directory)
 {
     QDir dir(directory);
@@ -37,10 +40,11 @@ AcquisitionSessionResult createSession(const StereoCameraConfig& config)
 {
     AcquisitionSessionResult result;
     const QString root = QString::fromStdString(config.outputDirectory.empty() ? "." : config.outputDirectory);
-    ensureDirectory(root);
+    const QString captureRoot = QDir(root).filePath("reconstruction/capture");
+    ensureDirectory(captureRoot);
 
     const QString sessionName = "scan_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    const QString sessionDirectory = QDir(root).filePath(sessionName);
+    const QString sessionDirectory = QDir(captureRoot).filePath(sessionName);
     ensureDirectory(sessionDirectory);
     ensureDirectory(QDir(sessionDirectory).filePath("left"));
     ensureDirectory(QDir(sessionDirectory).filePath("right"));
@@ -68,7 +72,7 @@ CameraDeviceInfo findDeviceById(const std::vector<CameraDeviceInfo>& devices, co
     throw std::runtime_error("Camera device was not found, id=" + id);
 }
 
-void applyGalvoParameters(IGalvoController& controller, const GalvoScanConfig& config)
+void applyGalvoParameters(IGalvoController& controller, const GalvoScanConfig& config, bool applyDirectionCommand)
 {
     const auto check = [](const GalvoCommandResult& result, const char* action) {
         if (!result.success) {
@@ -79,13 +83,13 @@ void applyGalvoParameters(IGalvoController& controller, const GalvoScanConfig& c
     check(controller.setSyncMode(config.syncMode), "set sync mode");
     check(controller.setCaptureIntervalMs(config.captureIntervalMs), "set capture interval");
     check(controller.setContinuousCaptureWaitMs(config.continuousCaptureWaitMs), "set continuous capture wait");
-    check(controller.setStepAngle(config.stepAngleDeg), "set step angle");
-    check(controller.setAutoRotationAngle(config.autoRotationAngleDeg), "set auto rotation angle");
     check(controller.setForwardSpeedMs(config.forwardSpeedMs), "set forward speed");
     check(controller.setReverseSpeedMs(config.reverseSpeedMs), "set reverse speed");
     check(controller.setLaserDuty(config.laserDuty), "set laser duty");
     check(controller.setVoltageRange(config.voltageRangeV), "set voltage range");
-    check(controller.setScanDirection(config.direction), "set scan direction");
+    if (applyDirectionCommand) {
+        check(controller.setScanDirection(config.direction), "set scan direction");
+    }
 }
 
 std::vector<unsigned char> laserSwitchCommand(bool enabled)
@@ -101,6 +105,10 @@ StereoCameraConfig makeScanCameraConfig(const IntegratedScanConfig& config)
     const bool useHardwareTrigger = config.galvo.syncMode == GalvoSyncMode::Sync;
     cameraConfig.leftParameters.useHardwareTrigger = useHardwareTrigger;
     cameraConfig.rightParameters.useHardwareTrigger = useHardwareTrigger;
+    if (useHardwareTrigger) {
+        cameraConfig.leftParameters.grabTimeoutMs = std::max(cameraConfig.leftParameters.grabTimeoutMs, kHardwareTriggerTimeoutMs);
+        cameraConfig.rightParameters.grabTimeoutMs = std::max(cameraConfig.rightParameters.grabTimeoutMs, kHardwareTriggerTimeoutMs);
+    }
     return cameraConfig;
 }
 
@@ -113,7 +121,7 @@ StereoCameraConfig makeScanCameraConfig(const IntegratedScanConfig& config)
     输出：
         返回值：包含采集结果、标定复用情况、重建结果和提示信息的工作流结果
 */
-IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const IntegratedScanConfig& config) const
+IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const IntegratedScanConfig& config, ProgressCallback progressCallback) const
 {
 #if !HTMSR_WITH_HIK_CAMERA
     (void)config;
@@ -150,7 +158,9 @@ IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const Inte
             ". Check that the galvo controller is powered on, the COM port is correct, "
             "and no other program is using the port.");
     }
-    applyGalvoParameters(galvoController, config.galvo);
+    const bool useHardwareTrigger = config.galvo.syncMode == GalvoSyncMode::Sync;
+    GalvoScanConfig deviceGalvoConfig = config.galvo;
+    applyGalvoParameters(galvoController, deviceGalvoConfig, useHardwareTrigger);
 
     const StereoCameraConfig cameraConfig = makeScanCameraConfig(config);
     const auto devices = enumerateHikCameraDevices();
@@ -177,24 +187,52 @@ IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const Inte
     Logger::instance().info("IntegratedWorkflow", "Laser switched on for integrated scan.");
     std::this_thread::sleep_for(std::chrono::milliseconds(std::max(0, config.galvo.continuousCaptureWaitMs)));
 
+    const bool cameraUsesHardwareTrigger = cameraConfig.leftParameters.useHardwareTrigger || cameraConfig.rightParameters.useHardwareTrigger;
     try {
-        const auto captureResult = galvoController.startContinuousCapture();
-        if (!captureResult.success) {
-            throw std::runtime_error("Failed to trigger galvo continuous capture.");
+        if (cameraUsesHardwareTrigger) {
+            const auto captureResult = galvoController.startContinuousCapture();
+            if (!captureResult.success) {
+                throw std::runtime_error("Failed to trigger galvo continuous capture.");
+            }
         }
-        Logger::instance().info("IntegratedWorkflow", "Galvo continuous capture started for integrated scan.");
+        Logger::instance().info(
+            "IntegratedWorkflow",
+            cameraUsesHardwareTrigger
+                ? "Galvo continuous capture started for integrated scan."
+                : "Software-sync integrated scan started. Galvo will move one configured step between saved frame pairs.");
 
+        if (!cameraUsesHardwareTrigger) {
+            for (int i = 0; i < 3; ++i) {
+                leftCamera.grabFrame(100);
+                rightCamera.grabFrame(100);
+            }
+        }
+        int consecutiveTriggerTimeouts = 0;
         for (int frameIndex = 0; frameIndex < cameraConfig.frameCount; ++frameIndex) {
             FramePair pair;
             pair.frameIndex = frameIndex;
             pair.left = leftCamera.grabFrame(cameraConfig.leftParameters.grabTimeoutMs);
             pair.right = rightCamera.grabFrame(cameraConfig.rightParameters.grabTimeoutMs);
+            if (progressCallback) {
+                progressCallback(frameIndex + 1, cameraConfig.frameCount, pair);
+            }
 
             if (pair.left.empty() || pair.right.empty()) {
                 ++result.acquisition.failedFrameCount;
                 Logger::instance().warning("IntegratedWorkflow", "Captured empty scan frame pair, frame=" + std::to_string(frameIndex + 1));
+                ++consecutiveTriggerTimeouts;
+                if (consecutiveTriggerTimeouts >= kMaxConsecutiveTriggerTimeouts) {
+                    result.acquisition.message = cameraUsesHardwareTrigger
+                        ? "Integrated scan stopped because cameras did not receive hardware trigger frames. "
+                          "Check the camera trigger line setting, camera trigger polarity, galvo trigger wiring, and galvo sync output."
+                        : "Integrated scan stopped because cameras did not provide valid live frames. "
+                          "Check camera connection, exposure, and camera streaming state.";
+                    Logger::instance().error("IntegratedWorkflow", result.acquisition.message);
+                    break;
+                }
                 continue;
             }
+            consecutiveTriggerTimeouts = 0;
 
             const QString fileName = QString::fromStdString(frameFileName(frameIndex));
             const QString leftPath = QDir(QString::fromStdString(result.acquisition.leftDirectory)).filePath(fileName);
@@ -210,6 +248,15 @@ IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const Inte
             result.acquisition.lastLeftPreview = pair.left.clone();
             result.acquisition.lastRightPreview = pair.right.clone();
             ++result.acquisition.capturedFrameCount;
+
+            if (!cameraUsesHardwareTrigger && frameIndex + 1 < cameraConfig.frameCount) {
+                const auto stepResult = galvoController.setScanDirection(config.galvo.direction);
+                if (!stepResult.success) {
+                    throw std::runtime_error("Failed to move galvo one software-sync step. " + stepResult.message);
+                }
+                const int settleMs = std::max({ 1, config.galvo.captureIntervalMs, config.galvo.forwardSpeedMs, config.galvo.reverseSpeedMs });
+                std::this_thread::sleep_for(std::chrono::milliseconds(settleMs));
+            }
         }
     } catch (...) {
         galvoController.sendRawCommand(laserSwitchCommand(false), false);
@@ -223,10 +270,14 @@ IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const Inte
     rightCamera.disconnect();
     galvoController.disconnect();
 
-    result.acquisition.success = result.acquisition.capturedFrameCount > 0;
-    result.acquisition.message = result.acquisition.success
-        ? "Integrated scan finished, frames=" + std::to_string(result.acquisition.capturedFrameCount)
-        : "Integrated scan finished without valid frames.";
+    if (!result.acquisition.message.empty()) {
+        result.acquisition.success = false;
+    } else {
+        result.acquisition.success = result.acquisition.capturedFrameCount > 0;
+        result.acquisition.message = result.acquisition.success
+            ? "Integrated scan finished, frames=" + std::to_string(result.acquisition.capturedFrameCount)
+            : "Integrated scan finished without valid frames.";
+    }
 
     if (!result.acquisition.success) {
         result.success = false;
@@ -244,9 +295,15 @@ IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const Inte
     reconstructionInput.matchDistanceThreshold = config.matchDistanceThreshold;
 
     result.reconstruction = reconstructionService.reconstruct(reconstructionInput);
-    result.success = true;
-    result.message = "Integrated scan and reconstruction finished. Points=" + std::to_string(result.reconstruction.mergedPoints.size());
-    Logger::instance().info("IntegratedWorkflow", result.message);
+    result.success = result.reconstruction.success;
+    result.message = result.success
+        ? "Integrated scan and reconstruction finished. Points=" + std::to_string(result.reconstruction.mergedPoints.size())
+        : result.reconstruction.message;
+    if (result.success) {
+        Logger::instance().info("IntegratedWorkflow", result.message);
+    } else {
+        Logger::instance().warning("IntegratedWorkflow", result.message);
+    }
     return result;
 #endif
 }

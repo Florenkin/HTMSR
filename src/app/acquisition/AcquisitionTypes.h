@@ -50,7 +50,7 @@ struct CameraDeviceInfo {
 
 // 单台相机采集参数，首版只放在线采集闭环必须使用的曝光、增益、触发和取流超时。
 struct CameraParameterConfig {
-    double exposureTime = 500000.0;
+    double exposureTime = 3000.0;
     double gain = 15.0;
     bool useHardwareTrigger = false;
     int triggerSourceLine = 0;
@@ -62,14 +62,14 @@ struct GalvoScanConfig {
     std::string portName = "COM3";
     int baudRate = 115200;
     int commandTimeoutMs = 500;
-    GalvoSyncMode syncMode = GalvoSyncMode::Sync;
+    GalvoSyncMode syncMode = GalvoSyncMode::Async;
     GalvoScanDirection direction = GalvoScanDirection::Forward;
     int captureIntervalMs = 30;
-    int continuousCaptureWaitMs = 50;
-    double stepAngleDeg = 0.05;
-    int autoRotationAngleDeg = 22;
-    int forwardSpeedMs = 10;
-    int reverseSpeedMs = 10;
+    int continuousCaptureWaitMs = 30;
+    double stepAngleDeg = 0.02;
+    int autoRotationAngleDeg = 20;
+    int forwardSpeedMs = 30;
+    int reverseSpeedMs = 30;
     int laserDuty = 100;
     double voltageRangeV = 7.0;
 };
@@ -87,8 +87,8 @@ struct StereoCameraConfig {
     std::string leftDeviceId;
     std::string rightDeviceId;
     bool useMockProvider = true;
-    int frameCount = 200;
-    std::string outputDirectory = ".";
+    int frameCount = 1000;
+    std::string outputDirectory = "output";
     CameraParameterConfig leftParameters;
     CameraParameterConfig rightParameters;
 };
@@ -97,7 +97,7 @@ struct StereoCameraConfig {
 struct IntegratedScanConfig {
     StereoCameraConfig stereoCamera;
     GalvoScanConfig galvo;
-    double totalRotationAngleDeg = 10.0;
+    double totalRotationAngleDeg = 20.0;
     CalibrationInput calibrationInput;
     std::string calibrationFile = "stereo_calibration.yml";
     LaserExtractionConfig laserConfig;
@@ -142,8 +142,8 @@ struct CalibrationCaptureSessionState {
 struct ReconstructionCaptureSessionState {
     AcquisitionSessionResult acquisition;
     GalvoScanConfig galvo;
-    double totalRotationAngleDeg = 10.0;
-    double stepAngleDeg = 0.05;
+    double totalRotationAngleDeg = 20.0;
+    double stepAngleDeg = 0.02;
     int requestedFrameCount = 0;
     bool active = false;
 };
@@ -186,5 +186,7 @@ using AcquisitionProviderPtr = std::unique_ptr<IAcquisitionProvider>;
 std::string toString(CameraState state);
 std::string toString(GalvoSyncMode mode);
 std::string toString(GalvoScanDirection direction);
+// 每次步进对应一组左右图像；角度不足一步时仍采集一组。
+int frameCountForGalvoScan(double totalRotationAngleDeg, double stepAngleDeg);
 
 } // namespace htmsr::app

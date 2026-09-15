@@ -1,6 +1,23 @@
 #include "app/acquisition/AcquisitionTypes.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 namespace htmsr::app {
+
+int frameCountForGalvoScan(double totalRotationAngleDeg, double stepAngleDeg)
+{
+    if (!std::isfinite(totalRotationAngleDeg) || !std::isfinite(stepAngleDeg) ||
+        totalRotationAngleDeg <= 0.0 || stepAngleDeg <= 0.0) {
+        return 0;
+    }
+    const double steps = totalRotationAngleDeg / stepAngleDeg;
+    if (!std::isfinite(steps) || steps > static_cast<double>(std::numeric_limits<int>::max())) {
+        return 0;
+    }
+    return std::max(1, static_cast<int>(std::lround(steps)));
+}
 
 /*
     函数功能：将相机状态枚举转换为便于日志和界面显示的字符串

@@ -30,7 +30,13 @@ public:
     */
     AcquisitionSessionResult capture(const StereoCameraConfig& config, ProgressCallback progressCallback = {}) const;
 
-private:
+    /*
+        函数功能：根据采集配置创建实时图像源，供在线预览和采集流程复用同一套相机配置
+        输入：
+            config：双相机设备和参数配置
+        输出：
+            返回值：已创建但尚未取帧的采集源对象
+    */
     AcquisitionProviderPtr createProvider(const StereoCameraConfig& config) const;
 };
 

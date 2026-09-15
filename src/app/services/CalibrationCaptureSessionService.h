@@ -16,9 +16,11 @@ public:
 
     CalibrationCaptureSessionState start(const StereoCameraConfig& config);
     AcquisitionSessionResult captureCurrentFrame();
+    FramePair grabPreviewFrame();
     void finish();
     bool isActive() const;
     AcquisitionSessionResult currentResult() const;
+    void setCurrentResult(const AcquisitionSessionResult& result);
 
 private:
     struct Impl;

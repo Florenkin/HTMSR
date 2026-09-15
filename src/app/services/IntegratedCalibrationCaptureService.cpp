@@ -5,6 +5,7 @@
 #include "core/Logger.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace htmsr::app {
 
@@ -15,7 +16,7 @@ namespace htmsr::app {
     输出：
         返回值：包含采集结果、标定结果和提示信息的工作流结果
 */
-IntegratedWorkflowResult IntegratedCalibrationCaptureService::run(const IntegratedScanConfig& config) const
+IntegratedWorkflowResult IntegratedCalibrationCaptureService::run(const IntegratedScanConfig& config, ProgressCallback progressCallback) const
 {
     if (config.stereoCamera.useMockProvider) {
         throw std::runtime_error("Auto calibration requires real cameras. Disable mock provider first.");
@@ -29,7 +30,7 @@ IntegratedWorkflowResult IntegratedCalibrationCaptureService::run(const Integrat
     cameraConfig.rightParameters.useHardwareTrigger = false;
 
     Logger::instance().info("IntegratedWorkflow", "Starting auto calibration workflow.");
-    result.acquisition = acquisitionService.capture(cameraConfig);
+    result.acquisition = acquisitionService.capture(cameraConfig, std::move(progressCallback));
     if (!result.acquisition.success) {
         result.success = false;
         result.message = "Auto calibration capture did not produce valid image pairs.";

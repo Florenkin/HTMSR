@@ -24,6 +24,8 @@ namespace htmsr::app {
 namespace {
 
 constexpr int kLaserPreflightTestMs = 5000;
+constexpr int kHardwareTriggerTimeoutMs = 3000;
+constexpr int kMaxConsecutiveTriggerTimeouts = 3;
 
 void ensureDirectory(const QString& directory)
 {
@@ -39,10 +41,11 @@ void ensureDirectory(const QString& directory)
 AcquisitionSessionResult createSession(const std::string& outputDirectory)
 {
     const QString root = QString::fromStdString(outputDirectory.empty() ? "." : outputDirectory);
-    ensureDirectory(root);
+    const QString captureRoot = QDir(root).filePath("reconstruction/capture");
+    ensureDirectory(captureRoot);
 
     const QString sessionName = "reconstruction_capture_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    const QString sessionDirectory = QDir(root).filePath(sessionName);
+    const QString sessionDirectory = QDir(captureRoot).filePath(sessionName);
     ensureDirectory(sessionDirectory);
     ensureDirectory(QDir(sessionDirectory).filePath("left"));
     ensureDirectory(QDir(sessionDirectory).filePath("right"));
@@ -71,7 +74,7 @@ CameraDeviceInfo findDeviceById(const std::vector<CameraDeviceInfo>& devices, co
     throw std::runtime_error("Camera device was not found, id=" + id);
 }
 
-void applyGalvoParameters(IGalvoController& controller, const GalvoScanConfig& config)
+void applyGalvoParameters(IGalvoController& controller, const GalvoScanConfig& config, bool applyDirectionCommand)
 {
     const auto check = [](const GalvoCommandResult& result, const char* action) {
         if (!result.success) {
@@ -82,13 +85,13 @@ void applyGalvoParameters(IGalvoController& controller, const GalvoScanConfig& c
     check(controller.setSyncMode(config.syncMode), "set sync mode");
     check(controller.setCaptureIntervalMs(config.captureIntervalMs), "set capture interval");
     check(controller.setContinuousCaptureWaitMs(config.continuousCaptureWaitMs), "set continuous capture wait");
-    check(controller.setStepAngle(config.stepAngleDeg), "set step angle");
-    check(controller.setAutoRotationAngle(config.autoRotationAngleDeg), "set auto rotation angle");
     check(controller.setForwardSpeedMs(config.forwardSpeedMs), "set forward speed");
     check(controller.setReverseSpeedMs(config.reverseSpeedMs), "set reverse speed");
     check(controller.setLaserDuty(config.laserDuty), "set laser duty");
     check(controller.setVoltageRange(config.voltageRangeV), "set voltage range");
-    check(controller.setScanDirection(config.direction), "set scan direction");
+    if (applyDirectionCommand) {
+        check(controller.setScanDirection(config.direction), "set scan direction");
+    }
 }
 
 std::vector<unsigned char> laserSwitchCommand(bool enabled)
@@ -191,13 +194,23 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
 
         try {
             GalvoScanConfig galvoConfig = config.galvo;
-            if (galvoConfig.syncMode != GalvoSyncMode::Async) {
-                Logger::instance().warning(
-                    "ReconstructionCapture",
-                    "Reconstruction capture uses software camera grabbing, so galvo sync mode is forced to async before continuous scanning.");
-                galvoConfig.syncMode = GalvoSyncMode::Async;
+            const bool useHardwareTrigger = galvoConfig.syncMode == GalvoSyncMode::Sync;
+            // 开始采集前的预检已使用“写入、重连、回读”确认步进角和自动旋转角。
+            // 控制器在处理步进角设置期间可能丢弃紧随其后的命令，因此此处不能再快速重复写入这两个运动参数。
+            // 软件同步只需进入异步时序后执行连续采集，不发送 0x04/0x05 方向命令以免切换到单次方向运动。
+            applyGalvoParameters(galvoController, galvoConfig, useHardwareTrigger);
+
+            if (useHardwareTrigger) {
+                const double exposureUs = std::max(config.stereoCamera.leftParameters.exposureTime, config.stereoCamera.rightParameters.exposureTime);
+                const double triggerIntervalUs = static_cast<double>(std::max(1, galvoConfig.captureIntervalMs)) * 1000.0;
+                if (exposureUs > triggerIntervalUs) {
+                    Logger::instance().warning(
+                        "ReconstructionCapture",
+                        "Hardware trigger timing may drop frames: exposure=" + std::to_string(exposureUs) +
+                            "us is longer than galvo trigger interval=" + std::to_string(triggerIntervalUs) +
+                            "us. Lower exposure or increase the capture interval.");
+                }
             }
-            applyGalvoParameters(galvoController, galvoConfig);
 
             const auto laserPreflightResult = galvoController.sendRawCommand(laserSwitchCommand(true), false);
             if (!laserPreflightResult.success) {
@@ -210,13 +223,12 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
             Logger::instance().info("ReconstructionCapture", "Laser preflight test finished. Starting reconstruction capture.");
 
             StereoCameraConfig cameraConfig = config.stereoCamera;
-            if (cameraConfig.leftParameters.useHardwareTrigger || cameraConfig.rightParameters.useHardwareTrigger) {
-                Logger::instance().warning(
-                    "ReconstructionCapture",
-                    "Hardware trigger is disabled for reconstruction capture. Frames will be grabbed by software while the galvo scans.");
+            cameraConfig.leftParameters.useHardwareTrigger = useHardwareTrigger;
+            cameraConfig.rightParameters.useHardwareTrigger = useHardwareTrigger;
+            if (useHardwareTrigger) {
+                cameraConfig.leftParameters.grabTimeoutMs = std::max(cameraConfig.leftParameters.grabTimeoutMs, kHardwareTriggerTimeoutMs);
+                cameraConfig.rightParameters.grabTimeoutMs = std::max(cameraConfig.rightParameters.grabTimeoutMs, kHardwareTriggerTimeoutMs);
             }
-            cameraConfig.leftParameters.useHardwareTrigger = false;
-            cameraConfig.rightParameters.useHardwareTrigger = false;
 
             const auto devices = enumerateHikCameraDevices();
             HikCameraDevice leftCamera(findDeviceById(devices, cameraConfig.leftDeviceId));
@@ -225,11 +237,22 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
             if (!leftCamera.connect() || !rightCamera.connect()) {
                 throw std::runtime_error("Failed to connect Hik stereo cameras.");
             }
-            if (!leftCamera.configure(cameraConfig.leftParameters) || !rightCamera.configure(cameraConfig.rightParameters)) {
-                throw std::runtime_error("Failed to configure Hik stereo cameras.");
+            if (!leftCamera.configure(cameraConfig.leftParameters)) {
+                throw std::runtime_error("Failed to configure left Hik camera: " + leftCamera.lastError());
+            }
+            if (!rightCamera.configure(cameraConfig.rightParameters)) {
+                throw std::runtime_error("Failed to configure right Hik camera: " + rightCamera.lastError());
             }
             if (!leftCamera.startGrabbing() || !rightCamera.startGrabbing()) {
                 throw std::runtime_error("Failed to start Hik stereo grabbing.");
+            }
+
+            if (!useHardwareTrigger) {
+                // 连续扫描开始前清掉实时预览遗留帧；后续保存的第一组图对应本次扫描。
+                for (int i = 0; i < 3; ++i) {
+                    leftCamera.grabFrame(100);
+                    rightCamera.grabFrame(100);
+                }
             }
 
             const auto laserOnResult = galvoController.sendRawCommand(laserSwitchCommand(true), false);
@@ -239,6 +262,8 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
             Logger::instance().info("ReconstructionCapture", "Laser switched on for reconstruction capture.");
             std::this_thread::sleep_for(std::chrono::milliseconds(std::max(200, config.galvo.continuousCaptureWaitMs)));
 
+            // 无论相机由外部脉冲还是自由取流，本次重建都必须让振镜以步进角、总旋转角和时间间隔连续扫描。
+            // 软件同步模式仅改变相机的取帧方式，不能把“方向”命令当作每帧的单步运动命令。
             const auto continuousCaptureResult = galvoController.startContinuousCapture();
             if (!continuousCaptureResult.success) {
                 throw std::runtime_error(
@@ -248,9 +273,19 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
             }
             Logger::instance().info(
                 "ReconstructionCapture",
-                "Galvo continuous scan started for reconstruction capture. Frames will be grabbed while the galvo scans.");
+                useHardwareTrigger
+                    ? "Galvo synchronized scan started for reconstruction capture. Cameras will wait for galvo hardware triggers."
+                    : "Software-sync continuous scan command sent. Galvo should rotate continuously while cameras save free-run frame pairs.");
 
+            int consecutiveTriggerTimeouts = 0;
+            auto nextSoftwareCapture = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(std::max(1, galvoConfig.continuousCaptureWaitMs));
             for (int frameIndex = 0; frameIndex < config.stereoCamera.frameCount; ++frameIndex) {
+                if (!useHardwareTrigger) {
+                    std::this_thread::sleep_until(nextSoftwareCapture);
+                    nextSoftwareCapture += std::chrono::milliseconds(std::max(1, galvoConfig.captureIntervalMs));
+                }
+
                 FramePair pair;
                 pair.frameIndex = frameIndex;
                 pair.left = leftCamera.grabFrame(cameraConfig.leftParameters.grabTimeoutMs);
@@ -258,13 +293,27 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
                 const bool saved = saveFramePair(result, pair, frameIndex);
                 logCapturedFrameProgress(frameIndex, config.stereoCamera.frameCount, pair, saved);
 
+                if (saved) {
+                    consecutiveTriggerTimeouts = 0;
+                } else if (pair.left.empty() || pair.right.empty()) {
+                    ++consecutiveTriggerTimeouts;
+                    if (consecutiveTriggerTimeouts >= kMaxConsecutiveTriggerTimeouts) {
+                        result.message = useHardwareTrigger
+                            ? "Reconstruction capture stopped because cameras did not receive hardware trigger frames. "
+                              "Check trigger line " + std::to_string(cameraConfig.leftParameters.triggerSourceLine) +
+                              ", camera trigger polarity, galvo trigger wiring, and galvo sync output. "
+                              "No stereo images were saved because both cameras must provide a frame for each pair."
+                            : "Reconstruction capture stopped because cameras did not provide valid live frames. "
+                              "Check camera connection, exposure, and camera streaming state.";
+                        Logger::instance().error("ReconstructionCapture", result.message);
+                        break;
+                    }
+                }
+
                 if (progressCallback) {
                     progressCallback(frameIndex + 1, config.stereoCamera.frameCount, pair);
                 }
 
-                if (frameIndex + 1 < config.stereoCamera.frameCount) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(std::max(1, galvoConfig.captureIntervalMs)));
-                }
             }
 
             leftCamera.stopGrabbing();
@@ -283,10 +332,12 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
 #endif
     }
 
-    result.success = result.capturedFrameCount > 0;
-    result.message = result.success
-        ? "Reconstruction capture finished, frames=" + std::to_string(result.capturedFrameCount)
-        : "Reconstruction capture finished without valid frames.";
+    if (result.message.empty()) {
+        result.success = result.capturedFrameCount > 0;
+        result.message = result.success
+            ? "Reconstruction capture finished, frames=" + std::to_string(result.capturedFrameCount)
+            : "Reconstruction capture finished without valid frames.";
+    }
     Logger::instance().info("ReconstructionCapture", result.message + ", directory=" + result.sessionDirectory);
     return result;
 }
