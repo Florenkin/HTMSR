@@ -18,7 +18,7 @@ enum class CameraState {
     Error
 };
 
-// 振镜与相机之间的时序关系，决定在线扫描时相机取流是跟随运动还是独立进行。
+// 振镜控制器协议 0x02 的同步状态，与相机自身的软/硬触发配置相互独立。
 enum class GalvoSyncMode {
     Async,
     Sync
@@ -62,12 +62,12 @@ struct GalvoScanConfig {
     std::string portName = "COM3";
     int baudRate = 115200;
     int commandTimeoutMs = 500;
-    GalvoSyncMode syncMode = GalvoSyncMode::Async;
+    GalvoSyncMode syncMode = GalvoSyncMode::Sync;
     GalvoScanDirection direction = GalvoScanDirection::Forward;
     int captureIntervalMs = 30;
     int continuousCaptureWaitMs = 30;
     double stepAngleDeg = 0.02;
-    int autoRotationAngleDeg = 20;
+    int autoRotationAngleDeg = 40;
     int forwardSpeedMs = 30;
     int reverseSpeedMs = 30;
     int laserDuty = 100;
@@ -87,7 +87,7 @@ struct StereoCameraConfig {
     std::string leftDeviceId;
     std::string rightDeviceId;
     bool useMockProvider = true;
-    int frameCount = 1000;
+    int frameCount = 2000;
     std::string outputDirectory = "output";
     CameraParameterConfig leftParameters;
     CameraParameterConfig rightParameters;
@@ -97,7 +97,7 @@ struct StereoCameraConfig {
 struct IntegratedScanConfig {
     StereoCameraConfig stereoCamera;
     GalvoScanConfig galvo;
-    double totalRotationAngleDeg = 20.0;
+    double totalRotationAngleDeg = 40.0;
     CalibrationInput calibrationInput;
     std::string calibrationFile = "stereo_calibration.yml";
     LaserExtractionConfig laserConfig;
@@ -142,7 +142,7 @@ struct CalibrationCaptureSessionState {
 struct ReconstructionCaptureSessionState {
     AcquisitionSessionResult acquisition;
     GalvoScanConfig galvo;
-    double totalRotationAngleDeg = 20.0;
+    double totalRotationAngleDeg = 40.0;
     double stepAngleDeg = 0.02;
     int requestedFrameCount = 0;
     bool active = false;

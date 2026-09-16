@@ -1,7 +1,24 @@
 #include "app/ui/PointCloudViewWidget.h"
 
+#include "core/Logger.h"
+#include "core/PointCloudService.h"
+
+#include <QApplication>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFormLayout>
+#include <QFrame>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QInputDialog>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QSplitter>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
@@ -14,6 +31,7 @@
 #include <vtkActor.h>
 #include <vtkCamera.h>
 #include <vtkGenericOpenGLRenderWindow.h>
+#include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkPoints.h>
 #include <vtkPolyData.h>
 #include <vtkPolyDataMapper.h>
@@ -28,6 +46,30 @@ namespace htmsr::app {
 namespace {
 
 constexpr size_t kMaxDisplayPointCount = 300000;
+
+struct PointCloudEntry {
+    int id = 0;
+    QString name;
+    QString source;
+    std::vector<Eigen::Vector3d> points;
+    Eigen::Vector3d minimum = Eigen::Vector3d::Zero();
+    Eigen::Vector3d maximum = Eigen::Vector3d::Zero();
+};
+
+void calculateBounds(PointCloudEntry& entry)
+{
+    if (entry.points.empty()) {
+        entry.minimum = Eigen::Vector3d::Zero();
+        entry.maximum = Eigen::Vector3d::Zero();
+        return;
+    }
+    entry.minimum = entry.points.front();
+    entry.maximum = entry.points.front();
+    for (const auto& point : entry.points) {
+        entry.minimum = entry.minimum.cwiseMin(point);
+        entry.maximum = entry.maximum.cwiseMax(point);
+    }
+}
 
 std::vector<Eigen::Vector3d> samplePointsForDisplay(const std::vector<Eigen::Vector3d>& points)
 {
@@ -231,6 +273,18 @@ private:
 
 class PointCloudViewWidget::Impl {
 public:
+    QVBoxLayout* previewListLayout = nullptr;
+    QLabel* emptyListLabel = nullptr;
+    QLabel* sourceLabel = nullptr;
+    QLabel* pointCountLabel = nullptr;
+    QLabel* minimumLabel = nullptr;
+    QLabel* maximumLabel = nullptr;
+    QLabel* extentLabel = nullptr;
+    std::vector<PointCloudEntry> clouds;
+    htmsr::PointCloudService service;
+    int selectedId = -1;
+    int nextId = 1;
+    int nextReconstructionNumber = 1;
 #if HTMSR_WITH_VTK_VIEWER
     QVTKOpenGLNativeWidget* widget = nullptr;
     vtkSmartPointer<vtkGenericOpenGLRenderWindow> renderWindow;
@@ -240,6 +294,7 @@ public:
     vtkSmartPointer<vtkVertexGlyphFilter> glyphFilter;
     vtkSmartPointer<vtkPolyDataMapper> mapper;
     vtkSmartPointer<vtkActor> actor;
+    vtkSmartPointer<vtkInteractorStyleTrackballCamera> interactionStyle;
 #else
     QtPointCloudCanvas* canvas = nullptr;
 #endif
@@ -249,9 +304,48 @@ PointCloudViewWidget::PointCloudViewWidget(QWidget* parent)
     : QWidget(parent)
     , impl_(std::make_unique<Impl>())
 {
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+    auto* rootLayout = new QHBoxLayout(this);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    auto* splitter = new QSplitter(Qt::Horizontal, this);
+    rootLayout->addWidget(splitter);
 
+    auto* previewPage = new QWidget;
+    auto* previewLayout = new QVBoxLayout(previewPage);
+    previewLayout->setContentsMargins(8, 8, 8, 8);
+    auto* previewHeader = new QHBoxLayout;
+    previewHeader->addWidget(new QLabel(QString::fromUtf8("点云预览栏")), 1);
+    auto* loadButton = new QPushButton(QString::fromUtf8("加载点云"));
+    previewHeader->addWidget(loadButton);
+    previewLayout->addLayout(previewHeader);
+
+    auto* listContainer = new QWidget;
+    impl_->previewListLayout = new QVBoxLayout(listContainer);
+    impl_->previewListLayout->setContentsMargins(4, 4, 4, 4);
+    impl_->previewListLayout->setSpacing(6);
+    auto* listScroll = new QScrollArea;
+    listScroll->setWidgetResizable(true);
+    listScroll->setWidget(listContainer);
+    listScroll->setMinimumWidth(410);
+    previewLayout->addWidget(listScroll, 1);
+
+    auto* detailPage = new QWidget;
+    auto* detailLayout = new QVBoxLayout(detailPage);
+    detailLayout->setContentsMargins(8, 8, 8, 8);
+
+    auto* informationGroup = new QGroupBox(QString::fromUtf8("点云详细信息"));
+    auto* informationForm = new QFormLayout(informationGroup);
+    impl_->sourceLabel = new QLabel;
+    impl_->sourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    impl_->sourceLabel->setWordWrap(true);
+    impl_->pointCountLabel = new QLabel;
+    impl_->minimumLabel = new QLabel;
+    impl_->maximumLabel = new QLabel;
+    impl_->extentLabel = new QLabel;
+    informationForm->addRow(QString::fromUtf8("来源"), impl_->sourceLabel);
+    informationForm->addRow(QString::fromUtf8("点数"), impl_->pointCountLabel);
+    informationForm->addRow(QString::fromUtf8("最小坐标"), impl_->minimumLabel);
+    informationForm->addRow(QString::fromUtf8("最大坐标"), impl_->maximumLabel);
+    informationForm->addRow(QString::fromUtf8("尺寸 X/Y/Z"), impl_->extentLabel);
 #if HTMSR_WITH_VTK_VIEWER
     impl_->renderWindow = vtkSmartPointer<vtkGenericOpenGLRenderWindow>::New();
     impl_->renderer = vtkSmartPointer<vtkRenderer>::New();
@@ -259,6 +353,8 @@ PointCloudViewWidget::PointCloudViewWidget(QWidget* parent)
 
     impl_->widget = new QVTKOpenGLNativeWidget(this);
     impl_->widget->setRenderWindow(impl_->renderWindow);
+    impl_->interactionStyle = vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
+    impl_->widget->interactor()->SetInteractorStyle(impl_->interactionStyle);
 
     impl_->points = vtkSmartPointer<vtkPoints>::New();
     impl_->polyData = vtkSmartPointer<vtkPolyData>::New();
@@ -278,11 +374,22 @@ PointCloudViewWidget::PointCloudViewWidget(QWidget* parent)
 
     impl_->renderer->AddActor(impl_->actor);
     impl_->renderer->SetBackground(0.78, 0.78, 0.78);
-    layout->addWidget(impl_->widget);
+    detailLayout->addWidget(impl_->widget, 1);
 #else
     impl_->canvas = new QtPointCloudCanvas(this);
-    layout->addWidget(impl_->canvas);
+    detailLayout->addWidget(impl_->canvas, 1);
 #endif
+    detailLayout->addWidget(informationGroup);
+
+    splitter->addWidget(previewPage);
+    splitter->addWidget(detailPage);
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({ 440, 1000 });
+
+    connect(loadButton, &QPushButton::clicked, this, &PointCloudViewWidget::loadPointCloud);
+    rebuildPreviewList();
+    updateDetail();
 }
 
 PointCloudViewWidget::~PointCloudViewWidget()
@@ -306,12 +413,41 @@ PointCloudViewWidget::~PointCloudViewWidget()
     impl_->glyphFilter = nullptr;
     impl_->polyData = nullptr;
     impl_->points = nullptr;
+    impl_->interactionStyle = nullptr;
     impl_->renderer = nullptr;
     impl_->renderWindow = nullptr;
 #endif
 }
 
 void PointCloudViewWidget::setPoints(const std::vector<Eigen::Vector3d>& points)
+{
+    if (points.empty()) {
+        return;
+    }
+    addPointCloud(
+        points,
+        QString::fromUtf8("重建点云 %1").arg(impl_->nextReconstructionNumber++),
+        QString::fromUtf8("软件重建结果"));
+}
+
+void PointCloudViewWidget::addPointCloud(
+    std::vector<Eigen::Vector3d> points,
+    const QString& name,
+    const QString& source)
+{
+    PointCloudEntry entry;
+    entry.id = impl_->nextId++;
+    entry.name = name;
+    entry.source = source;
+    entry.points = std::move(points);
+    calculateBounds(entry);
+    impl_->clouds.push_back(std::move(entry));
+    impl_->selectedId = impl_->clouds.back().id;
+    rebuildPreviewList();
+    updateDetail();
+}
+
+void PointCloudViewWidget::renderPoints(const std::vector<Eigen::Vector3d>& points)
 {
 #if HTMSR_WITH_VTK_VIEWER
     const auto displayPoints = samplePointsForDisplay(points);
@@ -336,7 +472,7 @@ void PointCloudViewWidget::setPoints(const std::vector<Eigen::Vector3d>& points)
 #endif
 }
 
-void PointCloudViewWidget::clear()
+void PointCloudViewWidget::clearRenderer()
 {
 #if HTMSR_WITH_VTK_VIEWER
     impl_->points = vtkSmartPointer<vtkPoints>::New();
@@ -347,6 +483,188 @@ void PointCloudViewWidget::clear()
 #else
     impl_->canvas->clear();
 #endif
+}
+
+void PointCloudViewWidget::clear()
+{
+    impl_->clouds.clear();
+    impl_->selectedId = -1;
+    rebuildPreviewList();
+    updateDetail();
+}
+
+void PointCloudViewWidget::loadPointCloud()
+{
+    const QString file = QFileDialog::getOpenFileName(
+        this,
+        QString::fromUtf8("加载点云"),
+        QString(),
+        QString::fromUtf8("点云文件 (*.pcd *.txt *.xyz);;PCD (*.pcd);;XYZ 文本 (*.txt *.xyz);;所有文件 (*.*)"));
+    if (file.isEmpty()) {
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    try {
+        auto points = impl_->service.load(file.toStdString());
+        QApplication::restoreOverrideCursor();
+        const QFileInfo information(file);
+        addPointCloud(std::move(points), information.completeBaseName(), information.absoluteFilePath());
+    } catch (const std::exception& ex) {
+        QApplication::restoreOverrideCursor();
+        Logger::instance().error("PointCloud", ex.what());
+        QMessageBox::critical(this, QString::fromUtf8("点云加载失败"), QString::fromUtf8(ex.what()));
+    }
+}
+
+void PointCloudViewWidget::renamePointCloud(int id)
+{
+    const auto iterator = std::find_if(impl_->clouds.begin(), impl_->clouds.end(), [id](const PointCloudEntry& entry) {
+        return entry.id == id;
+    });
+    if (iterator == impl_->clouds.end()) {
+        return;
+    }
+
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this,
+        QString::fromUtf8("重命名点云"),
+        QString::fromUtf8("点云名称"),
+        QLineEdit::Normal,
+        iterator->name,
+        &accepted).trimmed();
+    if (!accepted || name.isEmpty()) {
+        return;
+    }
+    iterator->name = name;
+    rebuildPreviewList();
+    updateDetail();
+}
+
+void PointCloudViewWidget::removePointCloud(int id)
+{
+    const auto iterator = std::find_if(impl_->clouds.begin(), impl_->clouds.end(), [id](const PointCloudEntry& entry) {
+        return entry.id == id;
+    });
+    if (iterator == impl_->clouds.end()) {
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this,
+        QString::fromUtf8("删除点云"),
+        QString::fromUtf8("确定从预览栏移除“%1”吗？\n本操作不会删除磁盘上的源文件。").arg(iterator->name),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    const int removedIndex = static_cast<int>(std::distance(impl_->clouds.begin(), iterator));
+    impl_->clouds.erase(iterator);
+    if (impl_->selectedId == id) {
+        if (impl_->clouds.empty()) {
+            impl_->selectedId = -1;
+        } else {
+            const int nextIndex = std::min(removedIndex, static_cast<int>(impl_->clouds.size()) - 1);
+            impl_->selectedId = impl_->clouds[static_cast<size_t>(nextIndex)].id;
+        }
+    }
+    rebuildPreviewList();
+    updateDetail();
+}
+
+void PointCloudViewWidget::selectPointCloud(int id)
+{
+    const auto iterator = std::find_if(impl_->clouds.begin(), impl_->clouds.end(), [id](const PointCloudEntry& entry) {
+        return entry.id == id;
+    });
+    if (iterator == impl_->clouds.end()) {
+        return;
+    }
+    impl_->selectedId = id;
+    rebuildPreviewList();
+    updateDetail();
+}
+
+void PointCloudViewWidget::rebuildPreviewList()
+{
+    while (QLayoutItem* item = impl_->previewListLayout->takeAt(0)) {
+        if (item->widget()) {
+            item->widget()->deleteLater();
+        }
+        delete item;
+    }
+
+    if (impl_->clouds.empty()) {
+        auto* emptyLabel = new QLabel(QString::fromUtf8("暂无点云，请加载本地文件或执行三维重建。"));
+        emptyLabel->setWordWrap(true);
+        emptyLabel->setAlignment(Qt::AlignCenter);
+        emptyLabel->setStyleSheet(QStringLiteral("color: #666666; padding: 24px;"));
+        impl_->previewListLayout->addWidget(emptyLabel);
+        impl_->previewListLayout->addStretch(1);
+        return;
+    }
+
+    for (size_t index = 0; index < impl_->clouds.size(); ++index) {
+        const PointCloudEntry& entry = impl_->clouds[index];
+        auto* row = new QFrame;
+        row->setFrameShape(QFrame::StyledPanel);
+        row->setStyleSheet(entry.id == impl_->selectedId
+                ? QStringLiteral("QFrame { background: #dbeafe; border: 1px solid #5b9bd5; }")
+                : QStringLiteral("QFrame { background: #ffffff; border: 1px solid #c8c8c8; }"));
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(6, 5, 6, 5);
+        auto* indexLabel = new QLabel(QString::number(index + 1));
+        indexLabel->setAlignment(Qt::AlignCenter);
+        indexLabel->setFixedWidth(28);
+        rowLayout->addWidget(indexLabel);
+
+        auto* nameButton = new QPushButton(entry.name);
+        nameButton->setFlat(true);
+        nameButton->setStyleSheet(QStringLiteral("text-align: left; padding: 4px;"));
+        nameButton->setToolTip(entry.source);
+        rowLayout->addWidget(nameButton, 1);
+        auto* renameButton = new QPushButton(QString::fromUtf8("重命名"));
+        auto* deleteButton = new QPushButton(QString::fromUtf8("删除"));
+        rowLayout->addWidget(renameButton);
+        rowLayout->addWidget(deleteButton);
+
+        connect(nameButton, &QPushButton::clicked, this, [this, id = entry.id]() { selectPointCloud(id); });
+        connect(renameButton, &QPushButton::clicked, this, [this, id = entry.id]() { renamePointCloud(id); });
+        connect(deleteButton, &QPushButton::clicked, this, [this, id = entry.id]() { removePointCloud(id); });
+        impl_->previewListLayout->addWidget(row);
+    }
+    impl_->previewListLayout->addStretch(1);
+}
+
+void PointCloudViewWidget::updateDetail()
+{
+    const auto iterator = std::find_if(impl_->clouds.begin(), impl_->clouds.end(), [this](const PointCloudEntry& entry) {
+        return entry.id == impl_->selectedId;
+    });
+    if (iterator == impl_->clouds.end()) {
+        impl_->sourceLabel->setText(QString::fromUtf8("—"));
+        impl_->pointCountLabel->setText(QStringLiteral("0"));
+        impl_->minimumLabel->setText(QString::fromUtf8("—"));
+        impl_->maximumLabel->setText(QString::fromUtf8("—"));
+        impl_->extentLabel->setText(QString::fromUtf8("—"));
+        clearRenderer();
+        return;
+    }
+
+    const auto coordinateText = [](const Eigen::Vector3d& point) {
+        return QStringLiteral("%1, %2, %3")
+            .arg(point.x(), 0, 'f', 4)
+            .arg(point.y(), 0, 'f', 4)
+            .arg(point.z(), 0, 'f', 4);
+    };
+    impl_->sourceLabel->setText(iterator->source);
+    impl_->pointCountLabel->setText(QString::number(static_cast<qulonglong>(iterator->points.size())));
+    impl_->minimumLabel->setText(coordinateText(iterator->minimum));
+    impl_->maximumLabel->setText(coordinateText(iterator->maximum));
+    impl_->extentLabel->setText(coordinateText(iterator->maximum - iterator->minimum));
+    renderPoints(iterator->points);
 }
 
 } // namespace htmsr::app

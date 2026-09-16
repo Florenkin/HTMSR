@@ -194,10 +194,15 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
 
         try {
             GalvoScanConfig galvoConfig = config.galvo;
-            const bool useHardwareTrigger = galvoConfig.syncMode == GalvoSyncMode::Sync;
+            const bool useHardwareTrigger = config.stereoCamera.leftParameters.useHardwareTrigger ||
+                config.stereoCamera.rightParameters.useHardwareTrigger;
             // 开始采集前的预检已使用“写入、重连、回读”确认步进角和自动旋转角。
             // 控制器在处理步进角设置期间可能丢弃紧随其后的命令，因此此处不能再快速重复写入这两个运动参数。
-            // 软件同步只需进入异步时序后执行连续采集，不发送 0x04/0x05 方向命令以免切换到单次方向运动。
+            // 相机的软件抓图不改变控制器同步状态；保留连续扫描路径，避免额外的 0x04/0x05 方向命令。
+            Logger::instance().info(
+                "ReconstructionCapture",
+                "Galvo controller mode=" + toString(galvoConfig.syncMode) +
+                    ", camera mode=" + (useHardwareTrigger ? "hardware-trigger" : "free-run (software capture)"));
             applyGalvoParameters(galvoController, galvoConfig, useHardwareTrigger);
 
             if (useHardwareTrigger) {
@@ -275,7 +280,7 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
                 "ReconstructionCapture",
                 useHardwareTrigger
                     ? "Galvo synchronized scan started for reconstruction capture. Cameras will wait for galvo hardware triggers."
-                    : "Software-sync continuous scan command sent. Galvo should rotate continuously while cameras save free-run frame pairs.");
+                    : "Continuous scan command sent. Cameras remain in free-run mode; galvo controller sync state is configured independently.");
 
             int consecutiveTriggerTimeouts = 0;
             auto nextSoftwareCapture = std::chrono::steady_clock::now() +

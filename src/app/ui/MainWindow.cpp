@@ -140,7 +140,7 @@ QString directionText(GalvoScanDirection direction)
 
 QString syncModeText(GalvoSyncMode mode)
 {
-    return mode == GalvoSyncMode::Sync ? QString::fromUtf8("硬触发") : QString::fromUtf8("软件同步");
+    return mode == GalvoSyncMode::Sync ? QString::fromUtf8("振镜同步") : QString::fromUtf8("振镜异步");
 }
 
 std::vector<unsigned char> parseHexCommandText(const QString& commandText)
@@ -1409,9 +1409,12 @@ void MainWindow::updateGalvoStatusBar(const IntegratedScanConfig& config, const 
     }
 
     const QString laserState = galvoLaserEnabled_ ? QString::fromUtf8("开") : QString::fromUtf8("关");
+    const bool cameraUsesHardwareTrigger = config.stereoCamera.leftParameters.useHardwareTrigger ||
+        config.stereoCamera.rightParameters.useHardwareTrigger;
+    const QString cameraMode = cameraUsesHardwareTrigger ? QString::fromUtf8("相机硬触发") : QString::fromUtf8("相机软件抓图");
     QString text = QString::fromUtf8("振镜 %1 | %2 | %3 | 步进 %4° | 总角 %5° | 自动 %6° | 抓图 %7ms | 等待 %8ms | 占空比 %9 | 电压 %10V | 激光 %11")
         .arg(QString::fromStdString(config.galvo.portName))
-        .arg(syncModeText(config.galvo.syncMode))
+        .arg(syncModeText(config.galvo.syncMode) + QStringLiteral(" / ") + cameraMode)
         .arg(directionText(config.galvo.direction))
         .arg(config.galvo.stepAngleDeg, 0, 'f', 4)
         .arg(config.totalRotationAngleDeg, 0, 'f', 2)
@@ -1461,7 +1464,6 @@ void MainWindow::onReconstructionFinished()
         reconstruction_ = reconstructionWatcher_.result();
         if (!reconstruction_.success || reconstruction_.mergedPoints.empty()) {
             autoExportReconstructionOnFinish_ = false;
-            pointCloudView_->clear();
             const QString message = reconstruction_.message.empty()
                 ? QString::fromUtf8("没有重建出有效点云，请检查标定文件、ROI、激光阈值和采集图像。")
                 : QString::fromStdString(reconstruction_.message);
@@ -1677,7 +1679,7 @@ void MainWindow::buildMenus()
     scanMenu->addAction(QString::fromUtf8("离线三维重建"), this, &MainWindow::runReconstruction);
 
     auto* viewMenu = menuBar()->addMenu(QString::fromUtf8("显示"));
-    viewMenu->addAction(QString::fromUtf8("清空点云"), pointCloudView_, &PointCloudViewWidget::clear);
+    viewMenu->addAction(QString::fromUtf8("清空点云预览栏"), pointCloudView_, &PointCloudViewWidget::clear);
 
     menuBar()->addMenu(QString::fromUtf8("设置"));
     menuBar()->addMenu(QString::fromUtf8("帮助"));

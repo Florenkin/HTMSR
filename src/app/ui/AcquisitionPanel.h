@@ -113,7 +113,7 @@ private:
     QComboBox* reconstructionCaptureModeCombo_ = nullptr;
     QSpinBox* triggerLineSpin_ = nullptr;
     QLineEdit* frameCountEdit_ = nullptr;
-    int derivedFrameCount_ = 1000;
+    int derivedFrameCount_ = 2000;
     QLineEdit* outputDirectoryEdit_ = nullptr;
     QDoubleSpinBox* exposureTimeSpin_ = nullptr;
     QDoubleSpinBox* gainSpin_ = nullptr;

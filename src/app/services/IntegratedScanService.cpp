@@ -102,7 +102,8 @@ std::vector<unsigned char> laserSwitchCommand(bool enabled)
 StereoCameraConfig makeScanCameraConfig(const IntegratedScanConfig& config)
 {
     StereoCameraConfig cameraConfig = config.stereoCamera;
-    const bool useHardwareTrigger = config.galvo.syncMode == GalvoSyncMode::Sync;
+    const bool useHardwareTrigger = cameraConfig.leftParameters.useHardwareTrigger ||
+        cameraConfig.rightParameters.useHardwareTrigger;
     cameraConfig.leftParameters.useHardwareTrigger = useHardwareTrigger;
     cameraConfig.rightParameters.useHardwareTrigger = useHardwareTrigger;
     if (useHardwareTrigger) {
@@ -158,7 +159,8 @@ IntegratedWorkflowResult IntegratedScanService::runScanAndReconstruct(const Inte
             ". Check that the galvo controller is powered on, the COM port is correct, "
             "and no other program is using the port.");
     }
-    const bool useHardwareTrigger = config.galvo.syncMode == GalvoSyncMode::Sync;
+    const bool useHardwareTrigger = config.stereoCamera.leftParameters.useHardwareTrigger ||
+        config.stereoCamera.rightParameters.useHardwareTrigger;
     GalvoScanConfig deviceGalvoConfig = config.galvo;
     applyGalvoParameters(galvoController, deviceGalvoConfig, useHardwareTrigger);
 

@@ -8,10 +8,78 @@
 #include <pcl/point_types.h>
 
 #include <cstdint>
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace htmsr {
+
+std::vector<Eigen::Vector3d> PointCloudService::load(const std::string& filename) const
+{
+    std::string extension = std::filesystem::path(filename).extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+
+    std::vector<Eigen::Vector3d> points;
+    if (extension == ".pcd") {
+        pcl::PointCloud<pcl::PointXYZ> cloud;
+        if (pcl::io::loadPCDFile(filename, cloud) != 0) {
+            throw std::runtime_error("Failed to read point cloud PCD: " + filename);
+        }
+        points.reserve(cloud.size());
+        for (const auto& point : cloud.points) {
+            if (std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z)) {
+                points.emplace_back(point.x, point.y, point.z);
+            }
+        }
+    } else if (extension == ".txt" || extension == ".xyz") {
+        std::ifstream input(filename);
+        if (!input) {
+            throw std::runtime_error("Failed to read point cloud text file: " + filename);
+        }
+
+        std::string line;
+        int lineNumber = 0;
+        while (std::getline(input, line)) {
+            ++lineNumber;
+            const auto commentPosition = line.find('#');
+            if (commentPosition != std::string::npos) {
+                line.erase(commentPosition);
+            }
+            std::replace(line.begin(), line.end(), ',', ' ');
+            std::istringstream stream(line);
+            double x = 0.0;
+            double y = 0.0;
+            double z = 0.0;
+            if (!(stream >> x >> y >> z)) {
+                stream.clear();
+                stream.str(line);
+                std::string remaining;
+                if (stream >> remaining) {
+                    throw std::runtime_error(
+                        "Invalid point cloud data at line " + std::to_string(lineNumber) + ": " + filename);
+                }
+                continue;
+            }
+            if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
+                points.emplace_back(x, y, z);
+            }
+        }
+    } else {
+        throw std::runtime_error("Unsupported point cloud format: " + extension);
+    }
+
+    if (points.empty()) {
+        throw std::runtime_error("Point cloud file contains no valid XYZ points: " + filename);
+    }
+    Logger::instance().info("PointCloud", "Point cloud loaded: " + filename + ", points=" + std::to_string(points.size()));
+    return points;
+}
 
 std::vector<Eigen::Vector3d> PointCloudService::mergeFrames(const std::vector<FrameReconstructionResult>& frames) const
 {

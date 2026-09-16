@@ -78,9 +78,11 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     reconstructionCaptureModeCombo_ = new QComboBox;
     reconstructionCaptureModeCombo_->addItems({
         QString::fromUtf8("硬触发"),
-        QString::fromUtf8("软件同步（无同步线测试）")
+        QString::fromUtf8("软件抓图（自由取流）")
     });
     reconstructionCaptureModeCombo_->setCurrentIndex(1);
+    reconstructionCaptureModeCombo_->setToolTip(QString::fromUtf8(
+        "此处仅控制相机的取帧方式。振镜默认发送采集与转动同步指令，与相机触发设置独立。"));
 
     triggerLineSpin_ = new QSpinBox;
     triggerLineSpin_->setRange(0, 3);
@@ -152,7 +154,7 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     galvoTotalRotationAngleSpin_->setRange(0.0, 40.0);
     galvoTotalRotationAngleSpin_->setDecimals(4);
     galvoTotalRotationAngleSpin_->setKeyboardTracking(false);
-    galvoTotalRotationAngleSpin_->setValue(20.0);
+    galvoTotalRotationAngleSpin_->setValue(40.0);
 
     galvoStepAngleSpin_ = new QDoubleSpinBox;
     galvoStepAngleSpin_->setRange(0.01, 650.25);
@@ -436,13 +438,15 @@ IntegratedScanConfig AcquisitionPanel::integratedScanConfig() const
 {
     IntegratedScanConfig config;
     config.stereoCamera = stereoCameraConfig();
+    const bool useHardwareTrigger = reconstructionCaptureModeCombo_->currentIndex() == 0;
+    config.stereoCamera.leftParameters.useHardwareTrigger = useHardwareTrigger;
+    config.stereoCamera.rightParameters.useHardwareTrigger = useHardwareTrigger;
     config.totalRotationAngleDeg = galvoTotalRotationAngleSpin_->value();
     config.galvo.portName = galvoPortEdit_->text().toStdString();
     config.galvo.baudRate = 115200;
     config.galvo.commandTimeoutMs = 500;
-    config.galvo.syncMode = reconstructionCaptureModeCombo_->currentIndex() == 0
-        ? GalvoSyncMode::Sync
-        : GalvoSyncMode::Async;
+    // 控制器同步命令不决定海康相机是否启用硬触发。
+    config.galvo.syncMode = GalvoSyncMode::Sync;
     config.galvo.direction = GalvoScanDirection::Forward;
     config.galvo.captureIntervalMs = 30;
     config.galvo.continuousCaptureWaitMs = 30;

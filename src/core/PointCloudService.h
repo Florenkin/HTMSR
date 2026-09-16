@@ -11,6 +11,9 @@ namespace htmsr {
 
 class PointCloudService {
 public:
+    // 从现有 TXT（每行 x y z）或 PCD 文件读取点云。
+    std::vector<Eigen::Vector3d> load(const std::string& filename) const;
+
     /*
         函数功能：将逐帧重建得到的三维点集合并为一个点云
         输入：

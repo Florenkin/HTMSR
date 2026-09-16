@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Core>
+#include <QString>
 #include <QWidget>
 
 #include <memory>
@@ -35,6 +36,16 @@ public slots:
     void clear();
 
 private:
+    void addPointCloud(std::vector<Eigen::Vector3d> points, const QString& name, const QString& source);
+    void loadPointCloud();
+    void renamePointCloud(int id);
+    void removePointCloud(int id);
+    void selectPointCloud(int id);
+    void rebuildPreviewList();
+    void updateDetail();
+    void renderPoints(const std::vector<Eigen::Vector3d>& points);
+    void clearRenderer();
+
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
