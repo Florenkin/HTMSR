@@ -31,7 +31,7 @@ public:
         输出：
             无（函数执行后会在磁盘上生成或覆盖对应的 txt 文件）
     */
-    void saveTxt(const std::string& filename, const std::vector<Eigen::Vector3d>& points) const;
+    void saveTxt(const std::string& filename, const std::vector<Eigen::Vector3d>& points, bool logSave = true) const;
 
     /*
         函数功能：将三维点云保存为 PCL pcd 文件
@@ -41,7 +41,7 @@ public:
         输出：
             无（函数执行后会在磁盘上生成或覆盖对应的 pcd 文件）
     */
-    void savePcd(const std::string& filename, const std::vector<Eigen::Vector3d>& points) const;
+    void savePcd(const std::string& filename, const std::vector<Eigen::Vector3d>& points, bool logSave = true) const;
 };
 
 } // namespace htmsr

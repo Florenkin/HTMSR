@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/Types.h"
+#include "core/Logger.h"
 
 #include <QMetaType>
 #include <QObject>
@@ -24,6 +24,9 @@ public:
 signals:
     // 收到核心日志后发出该信号，由 UI 日志面板在主线程中显示。
     void messageReceived(htmsr::LogMessage message);
+
+private:
+    Logger::SinkId sinkId_ = 0;
 };
 
 } // namespace htmsr::app

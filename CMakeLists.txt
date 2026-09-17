@@ -282,16 +282,21 @@ set(HTMSR_APP_SOURCES
     src/app/main.cpp
     src/app/acquisition/AcquisitionTypes.cpp
     src/app/acquisition/GalvoController.cpp
+    src/app/acquisition/GalvoCaptureSupport.cpp
+    src/app/acquisition/HardwareTriggeredStereoCapture.cpp
     src/app/acquisition/MockAcquisitionProvider.cpp
     src/app/acquisition/OfflineImageSequenceProvider.cpp
     src/app/acquisition/HikStereoCameraProvider.cpp
     src/app/services/AcquisitionService.cpp
     src/app/services/AppConfigService.cpp
+    src/app/services/FileLogSink.cpp
     src/app/services/CalibrationCaptureSessionService.cpp
     src/app/services/IntegratedCalibrationCaptureService.cpp
     src/app/services/IntegratedScanService.cpp
     src/app/services/QtLogSink.cpp
     src/app/services/ReconstructionCaptureSessionService.cpp
+    src/app/services/ReconstructionStorage.cpp
+    src/app/services/ResultExportService.cpp
     src/app/ui/AcquisitionPanel.cpp
     src/app/ui/CaptureReviewWidget.cpp
     src/app/ui/ImageViewWidget.cpp
@@ -303,6 +308,73 @@ set(HTMSR_APP_SOURCES
     src/app/ui/ZoomableImageView.cpp
 )
 
+option(HTMSR_BUILD_CAPTURE_TESTS "Build hardware-trigger stereo capture simulation tests" OFF)
+if(HTMSR_BUILD_CAPTURE_TESTS)
+    find_package(Threads REQUIRED)
+    enable_testing()
+    add_executable(htmsr_capture_tests
+        tests/HardwareTriggeredStereoCaptureTests.cpp
+        tests/GalvoCaptureWorkflowTests.cpp
+        src/app/acquisition/HardwareTriggeredStereoCapture.cpp
+        src/app/acquisition/GalvoCaptureSupport.cpp
+        src/app/acquisition/AcquisitionTypes.cpp
+        src/core/Logger.cpp
+    )
+    set_target_properties(htmsr_capture_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    target_include_directories(htmsr_capture_tests PRIVATE src ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(htmsr_capture_tests PRIVATE Eigen3::Eigen ${OpenCV_LIBS} Threads::Threads)
+    target_compile_definitions(htmsr_capture_tests PRIVATE NOMINMAX)
+    if(MSVC)
+        target_compile_options(htmsr_capture_tests PRIVATE /utf-8)
+    endif()
+    add_test(NAME hardware_trigger_stereo_capture COMMAND htmsr_capture_tests)
+
+    if(WIN32)
+        add_executable(htmsr_serial_diagnostics_tests
+            tests/SerialDiagnosticsTests.cpp
+            tests/AppConfigPersistenceTests.cpp
+            tests/CalibrationWorkflowTests.cpp
+            tests/ReconstructionStorageTests.cpp
+            tests/ResultExportTests.cpp
+            src/app/services/AppConfigService.cpp
+            src/app/services/CalibrationCaptureSessionService.cpp
+            src/app/services/ReconstructionCaptureSessionService.cpp
+            src/app/services/ReconstructionStorage.cpp
+            src/app/services/ResultExportService.cpp
+            src/app/acquisition/MockAcquisitionProvider.cpp
+            src/app/acquisition/GalvoController.cpp
+            src/app/acquisition/GalvoCaptureSupport.cpp
+            src/app/acquisition/AcquisitionTypes.cpp
+            src/app/ui/AcquisitionPanel.cpp
+            src/app/ui/AcquisitionPanel.h
+        )
+        target_include_directories(htmsr_serial_diagnostics_tests PRIVATE src)
+        target_link_libraries(htmsr_serial_diagnostics_tests PRIVATE htmsr_core Qt5::Widgets)
+        target_compile_definitions(htmsr_serial_diagnostics_tests PRIVATE HTMSR_WITH_HIK_CAMERA=0)
+        if(MSVC)
+            target_compile_options(htmsr_serial_diagnostics_tests PRIVATE /utf-8)
+        endif()
+        add_test(NAME serial_diagnostics COMMAND htmsr_serial_diagnostics_tests)
+        set_tests_properties(serial_diagnostics PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+        add_executable(htmsr_logging_tests
+            tests/LoggingTests.cpp
+            src/app/services/FileLogSink.cpp
+            src/app/services/QtLogSink.cpp
+            src/app/services/QtLogSink.h
+            src/app/ui/LogPanel.cpp
+            src/app/ui/LogPanel.h
+        )
+        target_include_directories(htmsr_logging_tests PRIVATE src)
+        target_link_libraries(htmsr_logging_tests PRIVATE htmsr_core Qt5::Widgets Threads::Threads)
+        if(MSVC)
+            target_compile_options(htmsr_logging_tests PRIVATE /utf-8)
+        endif()
+        add_test(NAME logging COMMAND htmsr_logging_tests)
+        set_tests_properties(logging PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+endif()
+
 if(HTMSR_ENABLE_HIK_CAMERA)
     set(HIK_MVS_INCLUDE_DIR "${HIK_MVS_ROOT}/Development/Includes" CACHE PATH "Path to Hikrobot MVS include directory")
     set(HIK_MVS_LIBRARY "${HIK_MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib" CACHE FILEPATH "Path to Hikrobot MVS x64 import library")
@@ -312,6 +384,23 @@ if(HTMSR_ENABLE_HIK_CAMERA)
     endif()
     if(NOT EXISTS "${HIK_MVS_LIBRARY}")
         message(FATAL_ERROR "Hikrobot MVS library was not found. Set HIK_MVS_LIBRARY to MvCameraControl.lib.")
+    endif()
+
+    if(HTMSR_BUILD_CAPTURE_TESTS)
+        add_executable(htmsr_hik_configuration_tests
+            tests/HikCameraConfigurationTests.cpp
+            src/app/acquisition/HikCameraDevice.cpp
+            src/core/Logger.cpp
+        )
+        set_target_properties(htmsr_hik_configuration_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        target_include_directories(htmsr_hik_configuration_tests PRIVATE
+            tests/fakes src ${OpenCV_INCLUDE_DIRS} "${HIK_MVS_INCLUDE_DIR}")
+        target_link_libraries(htmsr_hik_configuration_tests PRIVATE Eigen3::Eigen ${OpenCV_LIBS} Threads::Threads)
+        target_compile_definitions(htmsr_hik_configuration_tests PRIVATE NOMINMAX)
+        if(MSVC)
+            target_compile_options(htmsr_hik_configuration_tests PRIVATE /utf-8)
+        endif()
+        add_test(NAME hik_camera_configuration COMMAND htmsr_hik_configuration_tests)
     endif()
 
     list(APPEND HTMSR_APP_SOURCES

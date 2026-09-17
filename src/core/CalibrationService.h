@@ -38,7 +38,7 @@ public:
         输出：
             无（函数执行后会在磁盘上生成或覆盖对应的标定文件）
     */
-    void saveCalibration(const std::string& filename, const CalibrationResult& result) const;
+    void saveCalibration(const std::string& filename, const CalibrationResult& result, bool logSave = true) const;
 
 private:
     struct CameraCalibration {

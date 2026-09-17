@@ -158,9 +158,14 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
                 frame.diagnostics);
 
             if (shouldLogFrameDiagnostics(i + 1, pairCount, frame)) {
-                Logger::instance().info("Reconstruction", formatFrameDiagnostics(i + 1, frame));
+                Logger::instance().debug("Reconstruction", formatFrameDiagnostics(i + 1, frame));
             }
             result.mergedPoints.insert(result.mergedPoints.end(), frame.points.begin(), frame.points.end());
+            const int progressInterval = std::max(1, pairCount / 10 + (pairCount % 10 != 0));
+            if (i == 0 || i + 1 == pairCount || (i + 1) % progressInterval == 0) {
+                Logger::instance().info("Reconstruction", "重建进度：" + std::to_string(i + 1) +
+                    "/" + std::to_string(pairCount) + " 组，累计点数：" + std::to_string(result.mergedPoints.size()));
+            }
             frame.points.clear();
             frame.points.shrink_to_fit();
             frame.leftLinePreview.release();
@@ -181,7 +186,7 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
     result.message = result.success
         ? "Batch reconstruction finished. Total points=" + std::to_string(result.mergedPoints.size())
         : "Reconstruction finished without valid points. Check calibration, ROI, laser threshold, and captured image quality.";
-    Logger::instance().info("Reconstruction", result.message);
+    Logger::instance().log(result.success ? LogLevel::Info : LogLevel::Warning, "Reconstruction", result.message);
     return result;
 }
 

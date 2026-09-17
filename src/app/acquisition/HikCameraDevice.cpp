@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -28,7 +29,9 @@ std::string errorText(int code)
 {
     std::ostringstream stream;
     stream << "0x" << std::hex << std::uppercase << static_cast<unsigned int>(code);
-    if (static_cast<unsigned int>(code) == 0x80000007U) {
+    if (code == MV_E_PARAMETER) {
+        stream << " (Incorrect parameter or unsupported enum entry)";
+    } else if (static_cast<unsigned int>(code) == 0x80000007U) {
         stream << " (No data/trigger timeout)";
     } else if (static_cast<unsigned int>(code) == 0x80000106U) {
         stream << " (GenICam node access condition)";
@@ -162,7 +165,7 @@ std::vector<CameraDeviceInfo> enumerateHikCameraDevices()
     for (size_t i = 0; i < sdkDevices.size(); ++i) {
         devices.push_back(toDeviceInfo(*sdkDevices[i], static_cast<int>(i)));
     }
-    Logger::instance().info("HikCamera", "Enumerated Hik cameras, count=" + std::to_string(devices.size()));
+    Logger::instance().debug("HikCamera", "Enumerated Hik cameras, count=" + std::to_string(devices.size()));
     return devices;
 }
 
@@ -247,7 +250,7 @@ bool HikCameraDevice::connect()
     }
 
     impl_->state = CameraState::Connected;
-    Logger::instance().info("HikCamera", "Connected device, id=" + impl_->info.id);
+    Logger::instance().debug("HikCamera", "Connected device, id=" + impl_->info.id);
     return true;
 }
 
@@ -268,10 +271,109 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
     impl_->hardwareTriggerConfigured = false;
     impl_->lastError.clear();
 
+    const auto failTriggerConfiguration = [this](const std::string& message) {
+        impl_->lastError = message + ", id=" + impl_->info.id;
+        Logger::instance().error("HikCamera", impl_->lastError);
+        return false;
+    };
+    std::string triggerSelector;
+
+    if (config.useHardwareTrigger) {
+        // 机型可能使用 FrameStart，也可能只提供 FrameBurstStart；后者还必须限定每次触发一帧。
+        int code = MV_CC_SetEnumValueByString(impl_->handle, "AcquisitionMode", "Continuous");
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set AcquisitionMode=Continuous, code=" + errorText(code));
+        }
+        code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerMode", "Off");
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to disable trigger before selecting the frame trigger, code=" + errorText(code));
+        }
+        MVCC_ENUMVALUE selectors{};
+        code = MV_CC_GetEnumValue(impl_->handle, "TriggerSelector", &selectors);
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to enumerate TriggerSelector, code=" + errorText(code));
+        }
+        if (selectors.nSupportedNum == 0 || selectors.nSupportedNum > MV_MAX_XML_SYMBOLIC_NUM) {
+            return failTriggerConfiguration("Camera reports an invalid TriggerSelector entry count");
+        }
+        struct SelectorEntry {
+            unsigned int value;
+            std::string name;
+        };
+        std::vector<SelectorEntry> entries;
+        std::string supportedSelectors;
+        for (unsigned int i = 0; i < selectors.nSupportedNum; ++i) {
+            MVCC_ENUMENTRY entry{};
+            entry.nValue = selectors.nSupportValue[i];
+            code = MV_CC_GetEnumEntrySymbolic(impl_->handle, "TriggerSelector", &entry);
+            if (code != MV_OK) {
+                return failTriggerConfiguration("Failed to read TriggerSelector entry " +
+                    std::to_string(entry.nValue) + ", code=" + errorText(code));
+            }
+            const std::string name(entry.chSymbolic,
+                std::find(std::begin(entry.chSymbolic), std::end(entry.chSymbolic), '\0'));
+            entries.push_back({entry.nValue, name});
+            supportedSelectors += (supportedSelectors.empty() ? "" : ", ") + name;
+        }
+        Logger::instance().debug("HikCamera", "Supported TriggerSelector entries=[" + supportedSelectors +
+            "], id=" + impl_->info.id);
+        auto selected = std::find_if(entries.begin(), entries.end(), [](const SelectorEntry& entry) {
+            return entry.name == "FrameStart";
+        });
+        if (selected == entries.end()) {
+            selected = std::find_if(entries.begin(), entries.end(), [](const SelectorEntry& entry) {
+                return entry.name == "FrameBurstStart";
+            });
+        }
+        if (selected == entries.end()) {
+            return failTriggerConfiguration("Camera does not support FrameStart or FrameBurstStart; supported TriggerSelector entries=[" +
+                supportedSelectors + "]");
+        }
+        triggerSelector = selected->name;
+
+        // 清除相机保留的其它触发门控；使用设备枚举值，避免假设各机型的枚举编号一致。
+        for (const auto& entry : entries) {
+            code = MV_CC_SetEnumValue(impl_->handle, "TriggerSelector", entry.value);
+            if (code == MV_OK) {
+                code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerMode", "Off");
+            }
+            if (code != MV_OK) {
+                return failTriggerConfiguration("Failed to disable previous trigger selector " +
+                    entry.name + ", code=" + errorText(code));
+            }
+        }
+        code = MV_CC_SetEnumValue(impl_->handle, "TriggerSelector", selected->value);
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set TriggerSelector=" + triggerSelector + ", code=" + errorText(code));
+        }
+        MVCC_ENUMVALUE actualSelector{};
+        code = MV_CC_GetEnumValue(impl_->handle, "TriggerSelector", &actualSelector);
+        if (code != MV_OK || actualSelector.nCurValue != selected->value) {
+            return failTriggerConfiguration("Failed to verify TriggerSelector=" + triggerSelector + ", code=" + errorText(code));
+        }
+        MVCC_ENUMVALUE autoExposure{};
+        if (MV_CC_GetEnumValue(impl_->handle, "ExposureAuto", &autoExposure) == MV_OK) {
+            code = MV_CC_SetEnumValueByString(impl_->handle, "ExposureAuto", "Off");
+            if (code != MV_OK) {
+                return failTriggerConfiguration("Failed to set ExposureAuto=Off, code=" + errorText(code));
+            }
+        }
+        bool frameRateEnabled = false;
+        if (MV_CC_GetBoolValue(impl_->handle, "AcquisitionFrameRateEnable", &frameRateEnabled) == MV_OK) {
+            code = MV_CC_SetBoolValue(impl_->handle, "AcquisitionFrameRateEnable", false);
+            if (code != MV_OK) {
+                return failTriggerConfiguration("Failed to disable acquisition frame rate limit, code=" + errorText(code));
+            }
+        }
+    }
+
     // 首版只写入通用 GenICam 节点；曝光、增益等非关键节点失败时记录 Warning，
     // 但触发模式和触发源属于硬触发采集的必要条件，配置失败必须中止本次相机配置。
     int code = MV_CC_SetFloatValue(impl_->handle, "ExposureTime", static_cast<float>(config.exposureTime));
     if (code != MV_OK) {
+        if (config.useHardwareTrigger) {
+            return failTriggerConfiguration("Failed to set hardware trigger ExposureTime, code=" + errorText(code));
+        }
         Logger::instance().warning("HikCamera", "Set ExposureTime failed, id=" + impl_->info.id + ", code=" + errorText(code));
     }
     code = MV_CC_SetFloatValue(impl_->handle, "Gain", static_cast<float>(config.gain));
@@ -279,19 +381,13 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
         Logger::instance().warning("HikCamera", "Set Gain failed, id=" + impl_->info.id + ", code=" + errorText(code));
     }
 
-    const auto failTriggerConfiguration = [this](const std::string& message) {
-        impl_->lastError = message + ", id=" + impl_->info.id;
-        Logger::instance().error("HikCamera", impl_->lastError);
-        return false;
-    };
-
     if (!config.useHardwareTrigger) {
         // 软件同步测试使用自由取流。无需设置 TriggerSource=Software；部分机型仅在触发开启后允许写该节点。
         code = MV_CC_SetEnumValueByString(impl_->handle, "TriggerMode", "Off");
         if (code != MV_OK) {
             return failTriggerConfiguration("Failed to set TriggerMode=Off for free-run capture, code=" + errorText(code));
         }
-        Logger::instance().info("HikCamera", "Free-run capture configured, id=" + impl_->info.id);
+        Logger::instance().debug("HikCamera", "Free-run capture configured, id=" + impl_->info.id);
     } else {
         if (config.triggerSourceLine < 0) {
             return failTriggerConfiguration("Hardware trigger line must be non-negative");
@@ -315,10 +411,40 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
             return failTriggerConfiguration("Failed to set TriggerActivation=RisingEdge, code=" + errorText(code));
         }
 
+        if (triggerSelector == "FrameBurstStart") {
+            // 海康面阵相机的 Burst=1 才是单帧触发，不能沿用 MVS 中可能保留的连拍帧数。
+            MVCC_INTVALUE_EX burstCount{};
+            code = MV_CC_GetIntValueEx(impl_->handle, "AcquisitionBurstFrameCount", &burstCount);
+            if (code != MV_OK) {
+                return failTriggerConfiguration("Cannot verify single-frame FrameBurstStart: failed to read AcquisitionBurstFrameCount, code=" + errorText(code));
+            }
+            if (burstCount.nCurValue != 1) {
+                code = MV_CC_SetIntValueEx(impl_->handle, "AcquisitionBurstFrameCount", 1);
+                if (code != MV_OK) {
+                    return failTriggerConfiguration("Failed to set AcquisitionBurstFrameCount=1, code=" + errorText(code));
+                }
+                code = MV_CC_GetIntValueEx(impl_->handle, "AcquisitionBurstFrameCount", &burstCount);
+                if (code != MV_OK || burstCount.nCurValue != 1) {
+                    return failTriggerConfiguration("Failed to verify AcquisitionBurstFrameCount=1, code=" + errorText(code));
+                }
+            }
+        }
+
+        code = MV_CC_SetImageNodeNum(impl_->handle, 16);
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to configure 16 SDK image buffer nodes, code=" + errorText(code));
+        }
+        code = MV_CC_SetGrabStrategy(impl_->handle, MV_GrabStrategy_OneByOne);
+        if (code != MV_OK) {
+            return failTriggerConfiguration("Failed to set OneByOne grab strategy, code=" + errorText(code));
+        }
+
         impl_->hardwareTriggerConfigured = true;
         Logger::instance().info(
             "HikCamera",
-            "Hardware trigger configured: source=" + source + ", activation=RisingEdge, id=" + impl_->info.id);
+            "Hardware trigger configured: selector=" + triggerSelector +
+                (triggerSelector == "FrameBurstStart" ? ", burstFrames=1" : "") + ", source=" + source +
+                ", activation=RisingEdge, bufferNodes=16, strategy=OneByOne, id=" + impl_->info.id);
     }
 
     MVCC_INTVALUE_EX payloadSize{};
@@ -335,6 +461,45 @@ bool HikCameraDevice::configure(const CameraParameterConfig& config)
 std::string HikCameraDevice::lastError() const
 {
     return impl_ ? impl_->lastError : "Camera implementation is unavailable.";
+}
+
+bool HikCameraDevice::validateHardwareTriggerInterval(int intervalMs)
+{
+    const auto fail = [this](const std::string& message) {
+        impl_->lastError = message + ", id=" + impl_->info.id;
+        Logger::instance().error("HikCamera", impl_->lastError);
+        return false;
+    };
+    if (!impl_->handle || !impl_->hardwareTriggerConfigured || intervalMs <= 0) {
+        return fail("Hardware trigger timing validation requires a configured camera and a positive interval");
+    }
+    MVCC_FLOATVALUE exposure{};
+    const int exposureCode = MV_CC_GetFloatValue(impl_->handle, "ExposureTime", &exposure);
+    if (exposureCode != MV_OK) {
+        return fail("Cannot read actual ExposureTime, code=" + errorText(exposureCode));
+    }
+    if (exposure.fCurValue >= static_cast<float>(intervalMs) * 1000.0f) {
+        return fail("Actual camera exposure is not shorter than the trigger interval. Increase interval or lower exposure");
+    }
+    MVCC_FLOATVALUE resultingRate{};
+    int rateCode = MV_CC_GetFloatValue(impl_->handle, "ResultingFrameRate", &resultingRate);
+    if (rateCode != MV_OK) {
+        rateCode = MV_CC_GetFloatValue(impl_->handle, "AcquisitionResultingFrameRate", &resultingRate);
+    }
+    const double requestedRate = 1000.0 / intervalMs;
+    if (rateCode == MV_OK && resultingRate.fCurValue > 0.0f) {
+        if (requestedRate > resultingRate.fCurValue + 0.01) {
+            return fail("Trigger rate " + std::to_string(requestedRate) + " fps exceeds camera resulting rate " +
+                std::to_string(resultingRate.fCurValue) + " fps. Increase the trigger interval");
+        }
+        Logger::instance().info("HikCamera", "Trigger timing checked: exposure=" + std::to_string(exposure.fCurValue) +
+            "us, requestedRate=" + std::to_string(requestedRate) + "fps, resultingRate=" +
+            std::to_string(resultingRate.fCurValue) + "fps, id=" + impl_->info.id);
+    } else {
+        Logger::instance().warning("HikCamera", "Camera does not report resulting frame rate; readout/USB throughput must be verified on hardware. "
+            "Requested trigger rate=" + std::to_string(requestedRate) + "fps, id=" + impl_->info.id);
+    }
+    return true;
 }
 
 /*
@@ -362,7 +527,10 @@ bool HikCameraDevice::startGrabbing()
         // 在取流已经启动后清掉连续预览遗留帧，避免首帧被旧缓存占用。
         const int clearCode = MV_CC_ClearImageBuffer(impl_->handle);
         if (clearCode != MV_OK) {
-            Logger::instance().warning("HikCamera", "MV_CC_ClearImageBuffer failed, id=" + impl_->info.id + ", code=" + errorText(clearCode));
+            impl_->lastError = "MV_CC_ClearImageBuffer failed, id=" + impl_->info.id + ", code=" + errorText(clearCode);
+            Logger::instance().error("HikCamera", impl_->lastError);
+            stopGrabbing();
+            return false;
         }
     }
     return true;
@@ -418,6 +586,39 @@ cv::Mat HikCameraDevice::grabFrame(int timeoutMs)
     }
 
     return convertToMat(impl_->handle, impl_->frameBuffer.data(), frameInfo);
+}
+
+CameraFrame HikCameraDevice::grabFrameWithMetadata(int timeoutMs)
+{
+    if (!impl_->handle || impl_->state != CameraState::Streaming) {
+        throw std::runtime_error("Camera is not streaming, id=" + impl_->info.id);
+    }
+    MV_FRAME_OUT frame{};
+    const int code = MV_CC_GetImageBuffer(impl_->handle, &frame, static_cast<unsigned int>(std::max(0, timeoutMs)));
+    if (code == MV_E_NODATA) {
+        return {}; // 接收线程自行重试和计时，轮询无数据不刷屏，也不推进采集序号。
+    }
+    if (code != MV_OK) {
+        throw std::runtime_error("MV_CC_GetImageBuffer failed, id=" + impl_->info.id + ", code=" + errorText(code));
+    }
+    CameraFrame captured;
+    try {
+        captured.frameNumber = frame.stFrameInfo.nFrameNum;
+        captured.triggerIndex = frame.stFrameInfo.nTriggerIndex;
+        captured.lostPacketCount = frame.stFrameInfo.nLostPacket;
+        captured.hostTimestamp = frame.stFrameInfo.nHostTimeStamp;
+        captured.metadataValid = true;
+        captured.image = convertToMat(impl_->handle, frame.pBufAddr, frame.stFrameInfo);
+    } catch (...) {
+        MV_CC_FreeImageBuffer(impl_->handle, &frame);
+        throw;
+    }
+    const int freeCode = MV_CC_FreeImageBuffer(impl_->handle, &frame);
+    if (freeCode != MV_OK || captured.image.empty()) {
+        throw std::runtime_error("Camera frame conversion/buffer release failed, id=" + impl_->info.id +
+            ", code=" + errorText(freeCode));
+    }
+    return captured;
 }
 
 /*

@@ -98,7 +98,7 @@ std::vector<Eigen::Vector3d> PointCloudService::mergeFrames(const std::vector<Fr
     return merged;
 }
 
-void PointCloudService::saveTxt(const std::string& filename, const std::vector<Eigen::Vector3d>& points) const
+void PointCloudService::saveTxt(const std::string& filename, const std::vector<Eigen::Vector3d>& points, bool logSave) const
 {
     // TXT 格式按每行 x y z 保存，便于调试和其他软件快速读取。
     ensureParentDirectory(filename);
@@ -111,10 +111,17 @@ void PointCloudService::saveTxt(const std::string& filename, const std::vector<E
         out << point.x() << ' ' << point.y() << ' ' << point.z() << '\n';
     }
 
-    Logger::instance().info("PointCloud", "TXT point cloud saved: " + filename);
+    out.close();
+    if (!out) {
+        throw std::runtime_error("Failed to finish writing point cloud txt: " + filename);
+    }
+
+    if (logSave) {
+        Logger::instance().info("PointCloud", "TXT point cloud saved: " + filename);
+    }
 }
 
-void PointCloudService::savePcd(const std::string& filename, const std::vector<Eigen::Vector3d>& points) const
+void PointCloudService::savePcd(const std::string& filename, const std::vector<Eigen::Vector3d>& points, bool logSave) const
 {
     ensureParentDirectory(filename);
 
@@ -136,7 +143,9 @@ void PointCloudService::savePcd(const std::string& filename, const std::vector<E
         throw std::runtime_error("Failed to write point cloud pcd: " + filename);
     }
 
-    Logger::instance().info("PointCloud", "PCD point cloud saved: " + filename);
+    if (logSave) {
+        Logger::instance().info("PointCloud", "PCD point cloud saved: " + filename);
+    }
 }
 
 } // namespace htmsr

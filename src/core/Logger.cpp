@@ -1,4 +1,5 @@
 #include "core/Logger.h"
+#include <algorithm>
 
 namespace htmsr {
 
@@ -9,10 +10,20 @@ Logger& Logger::instance()
     return logger;
 }
 
-void Logger::addSink(Sink sink)
+Logger::SinkId Logger::addSink(Sink sink)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    sinks_.push_back(std::move(sink));
+    const auto id = nextSinkId_++;
+    sinks_.emplace_back(id, std::move(sink));
+    return id;
+}
+
+void Logger::removeSink(SinkId id)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    sinks_.erase(std::remove_if(sinks_.begin(), sinks_.end(), [id](const auto& entry) {
+        return entry.first == id;
+    }), sinks_.end());
 }
 
 void Logger::clearSinks()
@@ -43,7 +54,7 @@ void Logger::error(const std::string& module, const std::string& text)
 
 void Logger::log(LogLevel level, const std::string& module, const std::string& text)
 {
-    std::vector<Sink> sinks;
+    std::vector<std::pair<SinkId, Sink>> sinks;
     {
         // 先复制接收器列表，再在锁外回调，避免 UI 回调中再次写日志造成死锁。
         std::lock_guard<std::mutex> lock(mutex_);
@@ -51,7 +62,8 @@ void Logger::log(LogLevel level, const std::string& module, const std::string& t
     }
 
     LogMessage message{ level, module, text };
-    for (const auto& sink : sinks) {
+    for (const auto& entry : sinks) {
+        const auto& sink = entry.second;
         if (sink) {
             sink(message);
         }

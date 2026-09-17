@@ -9,11 +9,16 @@ HTMSR 是一个基于 `Qt 5.15.2 + Visual Studio 2022 + CMake + OpenCV + Eigen +
 - 离线双目标定：读取左右棋盘格图像，计算 `K1/D1/K2/D2/R/t/E/F`，保存 `stereo_calibration.yml`。
 - 离线重建：读取左右线激光图像，提取激光中心线，按双目几何恢复三维点云。
 - 激光中心线提取：支持灰度重心法和 Steger 方法。
-- 点云输出：支持 TXT / PCD 导出。
+- 点云输出：重建成功后自动保存 TXT / PCD。
 - 点云显示：Debug / Release 均可使用 VTK Qt 三维视图；如果 VTK Qt 组件不可用，会自动退回占位视图。
 - 在线采集：支持海康 MVS 相机枚举、连接、曝光/增益/触发参数配置、左右图像采集保存。
 - 振镜联动：支持按 `振镜通信协议.docx` 通过 Windows 串口 COM 下发振镜、电机、激光和采集节拍相关参数。
 - 一键流程：提供“一键自动标定”和“一键扫描重建”入口，复用现有标定与重建核心服务。
+- 参数记忆：正常关闭窗口或通过“文件 → 退出”关闭软件时，自动保存步进角度、总旋转角度、正反向速度、曝光、采集模式、触发线及标定/重建参数，下次启动恢复；采集帧数按恢复后的角度重新计算。
+- 标定界面：按钮依次为“采集”“标定”“导出”。点击“采集”自动开始并保存一组左右图像，重复点击继续采集；点击“标定”标定当前左右目录中的图像，并自动保存到 `output/calibration/result`，回填标定文件路径。选择已有“标定文件”即可加载；选择左右标定目录后，同一个按钮用于离线标定。标定或切换到重建页会自动结束采集并释放相机。“导出”将当前有效标定结果另存到用户指定的 YML/YAML 路径。
+- 重建界面：按钮依次为“采集”“重建”“导出”。“左重建目录”“右重建目录”位于“算法”上方，每次启动为空；完成采集后自动回填对应的左右图像目录，也可分别选择本地任意名称、任意位置的帧文件夹。“重建”始终读取当前选择的两个目录，统一执行在线采集后的重建和离线重建。“导出”可选择 PCD/TXT 格式及保存路径；导出按钮在结果可用且任务空闲时启用，原有自动保存保留。
+- 重建保存：重建帧按会话保存到 `output/reconstruction/capture/yyyyMMdd_HHmmss_zzz/left` 和 `right`。重建成功后自动保存 TXT、PCD 到 `output/reconstruction/result/point_cloud_<采集时间戳>.txt/.pcd`，一键扫描重建使用同一规则；普通离线目录使用完成时间戳。重复采集或重建发生重名时追加序号，保留历史结果。已移除立即保存参数、独立离线重建及手动导出 TXT/PCD 的工具栏和菜单入口；正常关闭仍自动保存数值参数。
+- 运行日志：消息面板默认显示两行，可拉高或滚动查看历史；保留关键操作、约每 10% 的采集/重建进度及警告和错误，省略预览和逐帧调试细节。每次运行自动将关键日志以 UTF-8 保存为 `C:/PROJECT/HTMSR/log/htmsr_yyyyMMdd_HHmmss_zzz.log`，启动时仅清理该目录内本软件生成、最后修改时间超过 24 小时的日志；同一时间戳的新运行不会覆盖已有日志。
 
 ## 目录结构
 
@@ -204,6 +209,8 @@ stereo_calibration.yml
 
 ## 离线重建流程
 
+在右侧“重建”页分别选择“左重建目录”“右重建目录”，加载有效标定文件并设置重建参数，点击“重建”。两个图像文件夹可使用任意名称，也可位于不同路径。
+
 输入素材：
 
 - 左重建图像目录
@@ -214,8 +221,8 @@ stereo_calibration.yml
 代码链路：
 
 ```text
-MainWindow::runReconstruction
--> ParameterPanel::reconstructionInput
+MainWindow::reconstructCapturedFrames
+-> AcquisitionPanel::reconstructionInput
 -> ReconstructionService::reconstruct
 -> listImageFiles
 -> reconstructFrame
@@ -224,7 +231,8 @@ MainWindow::runReconstruction
 -> pixelToRay
 -> 左右中心线匹配
 -> closestPointBetweenLines
--> PointCloudService::mergeFrames
+-> ReconstructionStorage::savePointClouds
+-> PointCloudService::saveTxt / savePcd
 -> PointCloudViewWidget::setPoints
 ```
 
@@ -232,10 +240,10 @@ MainWindow::runReconstruction
 
 - 批量三维点云
 - 左右中心线调试图
-- `point_cloud.txt`
-- `point_cloud.pcd`
+- `output/reconstruction/result/point_cloud_<时间戳>.txt`
+- `output/reconstruction/result/point_cloud_<时间戳>.pcd`
 
-每帧重建日志会输出诊断信息，包括左右中心线点数、覆盖率、匹配数、匹配率、误差、点云范围和失败原因。
+日志保留所选目录、约每 10% 的重建进度、保存路径及警告/错误；逐帧诊断属于调试细节，默认不显示。
 
 ## 在线采集与振镜联动
 

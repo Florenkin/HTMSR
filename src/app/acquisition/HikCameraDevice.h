@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/acquisition/AcquisitionTypes.h"
+#include "app/acquisition/HardwareTriggeredStereoCapture.h"
 
 namespace htmsr::app {
 
@@ -24,6 +25,8 @@ public:
     bool startGrabbing() override;
     void stopGrabbing() override;
     cv::Mat grabFrame(int timeoutMs) override;
+    CameraFrame grabFrameWithMetadata(int timeoutMs);
+    bool validateHardwareTriggerInterval(int intervalMs);
     void disconnect() override;
 
     // 最近一次配置失败的具体原因；供采集工作流把 SDK 的节点和错误码直接显示给用户。

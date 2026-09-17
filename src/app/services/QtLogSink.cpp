@@ -8,15 +8,16 @@ QtLogSink::QtLogSink(QObject* parent)
     : QObject(parent)
 {
     // 核心 Logger 不依赖 Qt，这里通过 sink 将日志桥接到 Qt 信号。
-    Logger::instance().addSink([this](const LogMessage& message) {
-        emit messageReceived(message);
+    sinkId_ = Logger::instance().addSink([this](const LogMessage& message) {
+        if (message.level != LogLevel::Debug) {
+            emit messageReceived(message);
+        }
     });
 }
 
 QtLogSink::~QtLogSink()
 {
-    // 窗口销毁时清理 sink，避免 Logger 持有已经失效的 QObject 回调。
-    Logger::instance().clearSinks();
+    Logger::instance().removeSink(sinkId_);
 }
 
 } // namespace htmsr::app

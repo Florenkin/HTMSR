@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QDir>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -18,13 +19,19 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <algorithm>
 
 namespace htmsr::app {
 namespace {
+
+constexpr char kDefaultOutputDirectory[] = "C:/PROJECT/HTMSR/output";
+constexpr double kCameraGain = 15.0;
+constexpr int kLaserDuty = 100;
 
 QWidget* wrapPathRow(QLineEdit* edit, QPushButton* button)
 {
@@ -39,6 +46,12 @@ QWidget* wrapPathRow(QLineEdit* edit, QPushButton* button)
 std::string textOf(const QLineEdit* edit)
 {
     return edit->text().toStdString();
+}
+
+std::string pathOf(const QLineEdit* edit)
+{
+    const QString directory = edit->text().trimmed();
+    return directory.isEmpty() ? std::string{} : QDir::cleanPath(QDir::fromNativeSeparators(directory)).toStdString();
 }
 
 cv::Rect makeRect(const QSpinBox* x, const QSpinBox* y, const QSpinBox* w, const QSpinBox* h)
@@ -58,7 +71,7 @@ QScrollArea* makeScrollArea(QWidget* content)
 } // namespace
 
 /*
-    函数功能：构造在线采集参数面板，初始化设备、曝光、触发、振镜参数和保存目录等控件
+    函数功能：构造在线采集参数面板，初始化设备、曝光、触发和振镜参数等控件
     输入：
         parent：Qt 父控件
     输出：
@@ -67,12 +80,14 @@ QScrollArea* makeScrollArea(QWidget* content)
 AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     : QWidget(parent)
 {
+    const AcquisitionParameterConfig defaults;
     auto* cameraGroup = new QGroupBox(QString::fromUtf8("硬件控制"));
     auto* cameraForm = new QFormLayout(cameraGroup);
 
     leftDeviceCombo_ = new QComboBox;
     rightDeviceCombo_ = new QComboBox;
     galvoDeviceEdit_ = new QLineEdit;
+    galvoDeviceEdit_->setObjectName("galvoSerialPort");
     galvoDeviceEdit_->setReadOnly(true);
 
     reconstructionCaptureModeCombo_ = new QComboBox;
@@ -80,30 +95,24 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
         QString::fromUtf8("硬触发"),
         QString::fromUtf8("软件抓图（自由取流）")
     });
-    reconstructionCaptureModeCombo_->setCurrentIndex(1);
+    reconstructionCaptureModeCombo_->setCurrentIndex(defaults.useHardwareTrigger ? 0 : 1);
     reconstructionCaptureModeCombo_->setToolTip(QString::fromUtf8(
-        "此处仅控制相机的取帧方式。振镜默认发送采集与转动同步指令，与相机触发设置独立。"));
+        "重建默认使用硬触发：同一振镜同步脉冲接到左右相机的 Line5，每次步进各拍一张。实时预览仍自由取流。"));
 
     triggerLineSpin_ = new QSpinBox;
-    triggerLineSpin_->setRange(0, 3);
-    triggerLineSpin_->setValue(0);
+    triggerLineSpin_->setRange(0, 5);
+    triggerLineSpin_->setValue(defaults.triggerSourceLine);
+    triggerLineSpin_->setToolTip(QString::fromUtf8("相机 TriggerSource，默认 Line5；所选线路必须由实际相机支持并接入同一触发信号。"));
 
     frameCountEdit_ = new QLineEdit;
     frameCountEdit_->setReadOnly(true);
 
-    outputDirectoryEdit_ = new QLineEdit("output");
-    auto* outputDirectoryButton = new QPushButton(QString::fromUtf8("..."));
-    outputDirectoryButton->setFixedWidth(28);
+    outputDirectory_ = kDefaultOutputDirectory;
 
     exposureTimeSpin_ = new QDoubleSpinBox;
     exposureTimeSpin_->setRange(1.0, 10000000.0);
     exposureTimeSpin_->setDecimals(2);
-    exposureTimeSpin_->setValue(3000.0);
-
-    gainSpin_ = new QDoubleSpinBox;
-    gainSpin_->setRange(0.0, 48.0);
-    gainSpin_->setDecimals(2);
-    gainSpin_->setValue(15.0);
+    exposureTimeSpin_->setValue(defaults.exposureTime);
 
     rawGalvoCommandEdit_ = new QLineEdit(QString::fromUtf8("55 AA 01 1A 1A"));
     rawGalvoCommandButton_ = new QPushButton(QString::fromUtf8("发送指令"));
@@ -114,79 +123,66 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     rawGalvoCommandWidget_ = new QWidget(this);
     rawGalvoCommandWidget_->setLayout(rawGalvoCommandLayout);
 
-    galvoPortEdit_ = new QLineEdit("COM3");
-    const auto ports = enumerateSerialPortNames();
-    if (!ports.empty()) {
-        galvoPortEdit_->setText(QString::fromStdString(ports.front()));
-    }
-    galvoDeviceEdit_->setText(galvoPortEdit_->text());
-
     cameraForm->addRow(QString::fromUtf8("左相机"), leftDeviceCombo_);
     cameraForm->addRow(QString::fromUtf8("右相机"), rightDeviceCombo_);
-    cameraForm->addRow(QString::fromUtf8("振镜"), galvoDeviceEdit_);
-    cameraForm->addRow(QString::fromUtf8("重建采集模式"), reconstructionCaptureModeCombo_);
+    cameraForm->addRow(QString::fromUtf8("振镜串口"), galvoDeviceEdit_);
     cameraForm->addRow(QString::fromUtf8("触发线"), triggerLineSpin_);
-    cameraForm->addRow(QString::fromUtf8("采集帧数"), frameCountEdit_);
-    cameraForm->addRow(QString::fromUtf8("保存目录"), wrapPathRow(outputDirectoryEdit_, outputDirectoryButton));
     cameraForm->addRow(QString::fromUtf8("曝光 us"), exposureTimeSpin_);
-    cameraForm->addRow(QString::fromUtf8("增益"), gainSpin_);
+    cameraForm->addRow(QString::fromUtf8("采集模式"), reconstructionCaptureModeCombo_);
 
-    auto* calibrationGroup = new QGroupBox(QString::fromUtf8("相机在线标定"));
+    auto* calibrationGroup = new QGroupBox(QString::fromUtf8("相机标定"));
     auto* calibrationForm = new QFormLayout(calibrationGroup);
     leftCalibrationEdit_ = createPathRow(calibrationForm, QString::fromUtf8("左标定目录"), true);
     rightCalibrationEdit_ = createPathRow(calibrationForm, QString::fromUtf8("右标定目录"), true);
     calibrationFileEdit_ = createPathRow(calibrationForm, QString::fromUtf8("标定文件"), false);
+    leftCalibrationEdit_->setObjectName("leftCalibrationDirectory");
+    rightCalibrationEdit_->setObjectName("rightCalibrationDirectory");
+    calibrationFileEdit_->setObjectName("calibrationFile");
     boardWidthSpin_ = createSpinRow(2, 100, 11);
     boardHeightSpin_ = createSpinRow(2, 100, 8);
     squareWidthSpin_ = createDoubleSpinRow(0.001, 10000.0, 15.0);
     squareHeightSpin_ = createDoubleSpinRow(0.001, 10000.0, 15.0);
-    offlineCalibrationButton_ = new QPushButton(QString::fromUtf8("离线标定"));
     calibrationForm->addRow(QString::fromUtf8("棋盘格宽"), boardWidthSpin_);
     calibrationForm->addRow(QString::fromUtf8("棋盘格高"), boardHeightSpin_);
     calibrationForm->addRow(QString::fromUtf8("方格宽"), squareWidthSpin_);
     calibrationForm->addRow(QString::fromUtf8("方格高"), squareHeightSpin_);
-    calibrationForm->addRow(offlineCalibrationButton_);
 
     auto* galvoGroup = new QGroupBox(QString::fromUtf8("振镜控制"));
     auto* galvoForm = new QFormLayout(galvoGroup);
 
     galvoTotalRotationAngleSpin_ = new QDoubleSpinBox;
+    galvoTotalRotationAngleSpin_->setObjectName("galvoTotalRotationAngle");
     galvoTotalRotationAngleSpin_->setRange(0.0, 40.0);
     galvoTotalRotationAngleSpin_->setDecimals(4);
     galvoTotalRotationAngleSpin_->setKeyboardTracking(false);
-    galvoTotalRotationAngleSpin_->setValue(40.0);
+    galvoTotalRotationAngleSpin_->setValue(defaults.totalRotationAngleDeg);
 
     galvoStepAngleSpin_ = new QDoubleSpinBox;
+    galvoStepAngleSpin_->setObjectName("galvoStepAngle");
     galvoStepAngleSpin_->setRange(0.01, 650.25);
     galvoStepAngleSpin_->setDecimals(4);
     galvoStepAngleSpin_->setSingleStep(0.01);
     galvoStepAngleSpin_->setKeyboardTracking(false);
     galvoStepAngleSpin_->setCorrectionMode(QAbstractSpinBox::CorrectToNearestValue);
-    galvoStepAngleSpin_->setValue(0.02);
+    galvoStepAngleSpin_->setValue(defaults.stepAngleDeg);
 
-    galvoForwardSpeedSpin_ = new QSpinBox;
-    galvoForwardSpeedSpin_->setRange(1, 1000);
-    galvoForwardSpeedSpin_->setValue(30);
+    galvoSpeedSpin_ = new QSpinBox;
+    galvoSpeedSpin_->setObjectName("galvoSpeed");
+    galvoSpeedSpin_->setRange(1, 1000);
+    galvoSpeedSpin_->setValue(defaults.speedMs);
+    galvoSpeedSpin_->setToolTip(QString::fromUtf8("同时设置正向和反向转动速度。"));
 
-    galvoReverseSpeedSpin_ = new QSpinBox;
-    galvoReverseSpeedSpin_->setRange(1, 1000);
-    galvoReverseSpeedSpin_->setValue(30);
-
-    galvoLaserDutySpin_ = new QSpinBox;
-    galvoLaserDutySpin_->setRange(10, 310);
-    galvoLaserDutySpin_->setValue(100);
-
-    galvoForm->addRow(QString::fromUtf8("串口号"), galvoPortEdit_);
+    galvoForm->addRow(QString::fromUtf8("采集帧数"), frameCountEdit_);
     galvoForm->addRow(QString::fromUtf8("总旋转角度 °"), galvoTotalRotationAngleSpin_);
     galvoForm->addRow(QString::fromUtf8("步进角度 °"), galvoStepAngleSpin_);
-    galvoForm->addRow(QString::fromUtf8("正向速度 ms"), galvoForwardSpeedSpin_);
-    galvoForm->addRow(QString::fromUtf8("反向速度 ms"), galvoReverseSpeedSpin_);
-    galvoForm->addRow(QString::fromUtf8("激光占空比"), galvoLaserDutySpin_);
+    galvoForm->addRow(QString::fromUtf8("正反向速度 ms"), galvoSpeedSpin_);
 
-    auto* reconstructionGroup = new QGroupBox(QString::fromUtf8("在线重建"));
+    auto* reconstructionGroup = new QGroupBox(QString::fromUtf8("点云重建"));
     auto* reconstructionForm = new QFormLayout(reconstructionGroup);
     leftReconstructionEdit_ = createPathRow(reconstructionForm, QString::fromUtf8("左重建目录"), true);
     rightReconstructionEdit_ = createPathRow(reconstructionForm, QString::fromUtf8("右重建目录"), true);
+    leftReconstructionEdit_->setObjectName("leftReconstructionDirectory");
+    rightReconstructionEdit_->setObjectName("rightReconstructionDirectory");
     laserModeCombo_ = new QComboBox;
     laserModeCombo_->addItems({ QString::fromUtf8("灰度重心"), QString::fromUtf8("Steger") });
     laserModeCombo_->setCurrentIndex(0);
@@ -236,37 +232,41 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     reconstructionForm->addRow(QString::fromUtf8("端点数量"), removeEndpointCountSpin_);
 
     refreshButton_ = new QPushButton(QString::fromUtf8("刷新设备"));
-    startCalibrationCaptureButton_ = new QPushButton(QString::fromUtf8("开始标定采集"));
-    captureCalibrationFrameButton_ = new QPushButton(QString::fromUtf8("采集当前帧"));
-    calibrateCapturedFramesButton_ = new QPushButton(QString::fromUtf8("标定当前采集帧"));
-    saveCalibrationResultButton_ = new QPushButton(QString::fromUtf8("保存标定结果"));
-    loadCalibrationResultButton_ = new QPushButton(QString::fromUtf8("加载标定结果"));
-    finishCalibrationCaptureButton_ = new QPushButton(QString::fromUtf8("结束标定采集"));
-    startReconstructionCaptureButton_ = new QPushButton(QString::fromUtf8("开始重建采集"));
-    reconstructCapturedFramesButton_ = new QPushButton(QString::fromUtf8("重建当前采集帧"));
+    captureCalibrationFrameButton_ = new QPushButton(QString::fromUtf8("采集"));
+    captureCalibrationFrameButton_->setObjectName("captureCalibrationFrame");
+    calibrateCapturedFramesButton_ = new QPushButton(QString::fromUtf8("标定"));
+    calibrateCapturedFramesButton_->setObjectName("calibrateFrames");
+    captureCalibrationFrameButton_->setToolTip(QString::fromUtf8("首次点击自动连接相机，采集并保存一组左右标定图像。"));
+    calibrateCapturedFramesButton_->setToolTip(QString::fromUtf8("标定左右目录中的图像，并自动保存标定结果。"));
+    exportCalibrationButton_ = new QPushButton(QString::fromUtf8("导出"));
+    exportCalibrationButton_->setObjectName("exportCalibration");
+    exportCalibrationButton_->setToolTip(QString::fromUtf8("将当前标定结果另存到指定路径。"));
+    startReconstructionCaptureButton_ = new QPushButton(QString::fromUtf8("采集"));
+    startReconstructionCaptureButton_->setObjectName("startReconstructionCapture");
+    reconstructCapturedFramesButton_ = new QPushButton(QString::fromUtf8("重建"));
+    reconstructCapturedFramesButton_->setObjectName("reconstructFrames");
+    reconstructCapturedFramesButton_->setToolTip(QString::fromUtf8("重建所选目录中的左右图像，并自动保存点云。"));
+    exportReconstructionButton_ = new QPushButton(QString::fromUtf8("导出"));
+    exportReconstructionButton_->setObjectName("exportReconstruction");
+    exportReconstructionButton_->setToolTip(QString::fromUtf8("将当前点云另存为 PCD 或 TXT。"));
 
     auto* buttonLayout = new QHBoxLayout;
     buttonLayout->addWidget(refreshButton_);
 
     auto* calibrationButtonLayout = new QHBoxLayout;
-    calibrationButtonLayout->addWidget(startCalibrationCaptureButton_);
     calibrationButtonLayout->addWidget(captureCalibrationFrameButton_);
     calibrationButtonLayout->addWidget(calibrateCapturedFramesButton_);
-    calibrationButtonLayout->addWidget(finishCalibrationCaptureButton_);
-
-    auto* calibrationResultButtonLayout = new QHBoxLayout;
-    calibrationResultButtonLayout->addWidget(saveCalibrationResultButton_);
-    calibrationResultButtonLayout->addWidget(loadCalibrationResultButton_);
+    calibrationButtonLayout->addWidget(exportCalibrationButton_);
 
     auto* reconstructionButtonLayout = new QHBoxLayout;
     reconstructionButtonLayout->addWidget(startReconstructionCaptureButton_);
     reconstructionButtonLayout->addWidget(reconstructCapturedFramesButton_);
+    reconstructionButtonLayout->addWidget(exportReconstructionButton_);
 
     auto* calibrationPage = new QWidget;
     auto* calibrationPageLayout = new QVBoxLayout(calibrationPage);
     calibrationPageLayout->addWidget(calibrationGroup);
     calibrationPageLayout->addLayout(calibrationButtonLayout);
-    calibrationPageLayout->addLayout(calibrationResultButtonLayout);
     calibrationPageLayout->addStretch();
 
     auto* reconstructionPage = new QWidget;
@@ -277,6 +277,7 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     reconstructionPageLayout->addStretch();
 
     auto* workflowTabs = new QTabWidget;
+    workflowTabs_ = workflowTabs;
     workflowTabs->addTab(makeScrollArea(calibrationPage), QString::fromUtf8("标定"));
     workflowTabs->addTab(makeScrollArea(reconstructionPage), QString::fromUtf8("重建"));
 
@@ -286,15 +287,28 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     root->addWidget(workflowTabs, 1);
 
     connect(refreshButton_, &QPushButton::clicked, this, &AcquisitionPanel::refreshDevicesRequested);
-    connect(offlineCalibrationButton_, &QPushButton::clicked, this, &AcquisitionPanel::offlineCalibrationRequested);
-    connect(startCalibrationCaptureButton_, &QPushButton::clicked, this, &AcquisitionPanel::startCalibrationCaptureRequested);
     connect(captureCalibrationFrameButton_, &QPushButton::clicked, this, &AcquisitionPanel::captureCalibrationFrameRequested);
     connect(calibrateCapturedFramesButton_, &QPushButton::clicked, this, &AcquisitionPanel::calibrateCapturedFramesRequested);
-    connect(saveCalibrationResultButton_, &QPushButton::clicked, this, &AcquisitionPanel::saveCalibrationResultRequested);
-    connect(loadCalibrationResultButton_, &QPushButton::clicked, this, &AcquisitionPanel::loadCalibrationResultRequested);
-    connect(finishCalibrationCaptureButton_, &QPushButton::clicked, this, &AcquisitionPanel::finishCalibrationCaptureRequested);
+    connect(exportCalibrationButton_, &QPushButton::clicked, this, &AcquisitionPanel::exportCalibrationRequested);
+    connect(workflowTabs, &QTabWidget::currentChanged, this, [this](int index) {
+        if (index != 0 && calibrationCaptureActive_) {
+            emit finishCalibrationCaptureRequested();
+        }
+    });
+    connect(leftCalibrationEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
+    connect(rightCalibrationEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
+    connect(leftReconstructionEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
+    connect(rightReconstructionEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
+    connect(calibrationFileEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (!calibrationFileEdit_->isModified()) {
+            return;
+        }
+        calibrationFileEdit_->setModified(false);
+        emit calibrationFileSelected(calibrationFileEdit_->text().trimmed());
+    });
     connect(startReconstructionCaptureButton_, &QPushButton::clicked, this, &AcquisitionPanel::startReconstructionCaptureRequested);
     connect(reconstructCapturedFramesButton_, &QPushButton::clicked, this, &AcquisitionPanel::reconstructCapturedFramesRequested);
+    connect(exportReconstructionButton_, &QPushButton::clicked, this, &AcquisitionPanel::exportReconstructionRequested);
 
     auto emitCameraConfigChanged = [this]() { emit cameraConfigChanged(); };
     connect(leftDeviceCombo_, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, [emitCameraConfigChanged](int) { emitCameraConfigChanged(); });
@@ -306,7 +320,6 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     });
     connect(triggerLineSpin_, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [emitCameraConfigChanged](int) { emitCameraConfigChanged(); });
     connect(exposureTimeSpin_, static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), this, [emitCameraConfigChanged](double) { emitCameraConfigChanged(); });
-    connect(gainSpin_, static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), this, [emitCameraConfigChanged](double) { emitCameraConfigChanged(); });
 
     auto sendRawGalvoCommand = [this]() {
         rememberRawGalvoCommand();
@@ -318,11 +331,6 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
         resetRawGalvoCommandHistoryNavigation();
     });
     rawGalvoCommandEdit_->installEventFilter(this);
-    connect(galvoPortEdit_, &QLineEdit::textChanged, this, [this](const QString& text) {
-        galvoDeviceEdit_->setText(text);
-        updateDerivedFrameCount();
-        emit galvoConfigChanged();
-    });
     connect(galvoTotalRotationAngleSpin_, static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         updateDerivedFrameCount();
         emit galvoConfigChanged();
@@ -333,17 +341,10 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
         emit galvoConfigChanged();
         emit galvoMotionParametersChanged();
     });
-    connect(galvoForwardSpeedSpin_, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [this](int) { emit galvoConfigChanged(); });
-    connect(galvoReverseSpeedSpin_, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [this](int) { emit galvoConfigChanged(); });
-    connect(galvoLaserDutySpin_, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [this](int) { emit galvoConfigChanged(); });
-    connect(outputDirectoryButton, &QPushButton::clicked, this, [this]() {
-        const QString directory = QFileDialog::getExistingDirectory(this, QString::fromUtf8("选择采集输出目录"), outputDirectoryEdit_->text());
-        if (!directory.isEmpty()) {
-            outputDirectoryEdit_->setText(directory);
-        }
-    });
+    connect(galvoSpeedSpin_, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [this](int) { emit galvoConfigChanged(); });
     triggerLineSpin_->setEnabled(reconstructionCaptureModeCombo_->currentIndex() == 0);
     updateDerivedFrameCount();
+    setSerialPorts(enumerateSerialPortNames());
     updateActionButtons();
 }
 
@@ -365,6 +366,25 @@ void AcquisitionPanel::setFrameCountFromDevice(double stepAngleDeg, int totalRot
     frameCountEdit_->setToolTip(QString::fromUtf8("已按设备回读计算：总角 %1° ÷ 步进 %2°。")
         .arg(totalRotationAngleDeg)
         .arg(stepAngleDeg, 0, 'f', 4));
+}
+
+// 自动识别在线串口；多个端口时保留仍在线的已识别端口，避免误用其他设备。
+void AcquisitionPanel::setSerialPorts(const std::vector<std::string>& ports)
+{
+    const std::string previous = galvoPortName_;
+    if (std::find(ports.begin(), ports.end(), galvoPortName_) == ports.end()) {
+        galvoPortName_ = ports.size() == 1 ? ports.front() : std::string{};
+    }
+    galvoDeviceEdit_->setText(QString::fromStdString(galvoPortName_));
+    const QString hint = ports.empty() ? QString{}
+        : QString::fromUtf8("检测到多个串口，暂时无法自动确定振镜端口");
+    galvoDeviceEdit_->setPlaceholderText(hint);
+    galvoDeviceEdit_->setToolTip(galvoPortName_.empty() ? hint
+        : QString::fromUtf8("软件已自动识别此在线串口，采集前会验证振镜参数通信。"));
+    if (previous != galvoPortName_) {
+        updateDerivedFrameCount();
+        emit galvoConfigChanged();
+    }
 }
 
 /*
@@ -413,11 +433,11 @@ StereoCameraConfig AcquisitionPanel::stereoCameraConfig() const
     config.rightDeviceId = rightDeviceCombo_->currentData().toString().toStdString();
     config.useMockProvider = false;
     config.frameCount = derivedFrameCount_;
-    config.outputDirectory = outputDirectoryEdit_->text().toStdString();
+    config.outputDirectory = outputDirectory_;
     config.leftParameters.exposureTime = exposureTimeSpin_->value();
     config.rightParameters.exposureTime = exposureTimeSpin_->value();
-    config.leftParameters.gain = gainSpin_->value();
-    config.rightParameters.gain = gainSpin_->value();
+    config.leftParameters.gain = kCameraGain;
+    config.rightParameters.gain = kCameraGain;
     config.leftParameters.useHardwareTrigger = false;
     config.rightParameters.useHardwareTrigger = false;
     config.leftParameters.triggerSourceLine = triggerLineSpin_->value();
@@ -442,7 +462,7 @@ IntegratedScanConfig AcquisitionPanel::integratedScanConfig() const
     config.stereoCamera.leftParameters.useHardwareTrigger = useHardwareTrigger;
     config.stereoCamera.rightParameters.useHardwareTrigger = useHardwareTrigger;
     config.totalRotationAngleDeg = galvoTotalRotationAngleSpin_->value();
-    config.galvo.portName = galvoPortEdit_->text().toStdString();
+    config.galvo.portName = galvoPortName_;
     config.galvo.baudRate = 115200;
     config.galvo.commandTimeoutMs = 500;
     // 控制器同步命令不决定海康相机是否启用硬触发。
@@ -452,9 +472,9 @@ IntegratedScanConfig AcquisitionPanel::integratedScanConfig() const
     config.galvo.continuousCaptureWaitMs = 30;
     config.galvo.stepAngleDeg = galvoStepAngleSpin_->value();
     config.galvo.autoRotationAngleDeg = static_cast<int>(std::lround(config.totalRotationAngleDeg));
-    config.galvo.forwardSpeedMs = galvoForwardSpeedSpin_->value();
-    config.galvo.reverseSpeedMs = galvoReverseSpeedSpin_->value();
-    config.galvo.laserDuty = galvoLaserDutySpin_->value();
+    config.galvo.forwardSpeedMs = galvoSpeedSpin_->value();
+    config.galvo.reverseSpeedMs = galvoSpeedSpin_->value();
+    config.galvo.laserDuty = kLaserDuty;
     config.galvo.voltageRangeV = 7.0;
     config.forceRecalibration = false;
     return config;
@@ -465,13 +485,21 @@ AppProjectConfig AcquisitionPanel::projectConfig() const
     AppProjectConfig config;
     config.leftCalibrationDirectory = textOf(leftCalibrationEdit_);
     config.rightCalibrationDirectory = textOf(rightCalibrationEdit_);
-    config.leftReconstructionDirectory = textOf(leftReconstructionEdit_);
-    config.rightReconstructionDirectory = textOf(rightReconstructionEdit_);
+    const auto reconstruction = reconstructionInput({});
+    config.leftReconstructionDirectory = reconstruction.leftDirectory;
+    config.rightReconstructionDirectory = reconstruction.rightDirectory;
     config.calibrationFile = textOf(calibrationFileEdit_);
-    config.outputDirectory = textOf(outputDirectoryEdit_);
+    config.outputDirectory = outputDirectory_;
     config.calibrationInput = calibrationInput();
-    config.laserConfig = reconstructionInput({}).laserConfig;
+    config.laserConfig = reconstruction.laserConfig;
     config.matchDistanceThreshold = matchDistanceSpin_->value();
+    auto& acquisition = config.acquisitionParameters;
+    acquisition.exposureTime = exposureTimeSpin_->value();
+    acquisition.useHardwareTrigger = reconstructionCaptureModeCombo_->currentIndex() == 0;
+    acquisition.triggerSourceLine = triggerLineSpin_->value();
+    acquisition.stepAngleDeg = galvoStepAngleSpin_->value();
+    acquisition.totalRotationAngleDeg = galvoTotalRotationAngleSpin_->value();
+    acquisition.speedMs = galvoSpeedSpin_->value();
     return config;
 }
 
@@ -490,8 +518,8 @@ CalibrationInput AcquisitionPanel::calibrationInput() const
 ReconstructionInput AcquisitionPanel::reconstructionInput(const CalibrationResult& calibration) const
 {
     ReconstructionInput input;
-    input.leftDirectory = textOf(leftReconstructionEdit_);
-    input.rightDirectory = textOf(rightReconstructionEdit_);
+    input.leftDirectory = pathOf(leftReconstructionEdit_);
+    input.rightDirectory = pathOf(rightReconstructionEdit_);
     input.imageRange = { -1, -1 };
     input.calibration = calibration;
     input.laserConfig.mode = laserModeCombo_->currentIndex() == 1 ? LaserExtractionMode::Steger : LaserExtractionMode::GrayCentroid;
@@ -511,12 +539,21 @@ ReconstructionInput AcquisitionPanel::reconstructionInput(const CalibrationResul
 
 void AcquisitionPanel::setProjectConfig(const AppProjectConfig& config)
 {
+    // 恢复界面参数时不下发振镜命令或重启相机预览。
+    const QSignalBlocker blocker(this);
+    const auto& acquisition = config.acquisitionParameters;
+    exposureTimeSpin_->setValue(acquisition.exposureTime);
+    reconstructionCaptureModeCombo_->setCurrentIndex(acquisition.useHardwareTrigger ? 0 : 1);
+    triggerLineSpin_->setValue(acquisition.triggerSourceLine);
+    galvoTotalRotationAngleSpin_->setValue(acquisition.totalRotationAngleDeg);
+    galvoStepAngleSpin_->setValue(acquisition.stepAngleDeg);
+    galvoSpeedSpin_->setValue(acquisition.speedMs);
     leftCalibrationEdit_->setText(QString::fromStdString(config.leftCalibrationDirectory));
     rightCalibrationEdit_->setText(QString::fromStdString(config.rightCalibrationDirectory));
-    leftReconstructionEdit_->setText(QString::fromStdString(config.leftReconstructionDirectory));
-    rightReconstructionEdit_->setText(QString::fromStdString(config.rightReconstructionDirectory));
+    // 输入目录每次启动保持为空，由本次采集或用户选择提供。
+    setReconstructionDirectories({}, {});
     calibrationFileEdit_->setText(QString::fromStdString(config.calibrationFile));
-    outputDirectoryEdit_->setText(QString::fromStdString(config.outputDirectory));
+    outputDirectory_ = config.outputDirectory.empty() ? kDefaultOutputDirectory : config.outputDirectory;
     boardWidthSpin_->setValue(config.calibrationInput.boardSize.width);
     boardHeightSpin_->setValue(config.calibrationInput.boardSize.height);
     squareWidthSpin_->setValue(config.calibrationInput.squareSize.width);
@@ -543,6 +580,14 @@ void AcquisitionPanel::setProjectConfig(const AppProjectConfig& config)
     matchDistanceSpin_->setValue(config.matchDistanceThreshold);
     removeEndpointsCheck_->setChecked(config.laserConfig.removeEndPoints);
     removeEndpointCountSpin_->setValue(config.laserConfig.removeEndPointCount);
+    updateDerivedFrameCount();
+}
+
+void AcquisitionPanel::commitPendingEdits()
+{
+    for (auto* spin : findChildren<QAbstractSpinBox*>()) {
+        spin->interpretText();
+    }
 }
 
 void AcquisitionPanel::setCalibrationDirectories(const std::string& leftDirectory, const std::string& rightDirectory)
@@ -558,8 +603,8 @@ void AcquisitionPanel::setCalibrationFile(const std::string& calibrationFile)
 
 void AcquisitionPanel::setReconstructionDirectories(const std::string& leftDirectory, const std::string& rightDirectory)
 {
-    leftReconstructionEdit_->setText(QString::fromStdString(leftDirectory));
-    rightReconstructionEdit_->setText(QString::fromStdString(rightDirectory));
+    leftReconstructionEdit_->setText(QDir::fromNativeSeparators(QString::fromStdString(leftDirectory)));
+    rightReconstructionEdit_->setText(QDir::fromNativeSeparators(QString::fromStdString(rightDirectory)));
 }
 
 QLineEdit* AcquisitionPanel::createPathRow(QFormLayout* form, const QString& label, bool directory)
@@ -570,9 +615,12 @@ QLineEdit* AcquisitionPanel::createPathRow(QFormLayout* form, const QString& lab
     connect(button, &QPushButton::clicked, this, [edit, directory, this]() {
         const QString value = directory
             ? QFileDialog::getExistingDirectory(this, QString::fromUtf8("选择目录"), edit->text())
-            : QFileDialog::getSaveFileName(this, QString::fromUtf8("选择文件"), edit->text(), QString::fromUtf8("YAML (*.yml *.yaml);;所有文件 (*.*)"));
+            : QFileDialog::getOpenFileName(this, QString::fromUtf8("选择标定文件"), edit->text(), QString::fromUtf8("YAML (*.yml *.yaml);;所有文件 (*.*)"));
         if (!value.isEmpty()) {
             edit->setText(value);
+            if (!directory) {
+                emit calibrationFileSelected(value);
+            }
         }
     });
 
@@ -697,29 +745,41 @@ void AcquisitionPanel::setCalibrationCaptureState(bool active, int capturedFrame
     updateActionButtons();
 }
 
-void AcquisitionPanel::setReconstructionCaptureReady(bool ready)
+void AcquisitionPanel::setResultAvailability(bool calibrationAvailable, bool reconstructionAvailable)
 {
-    reconstructionCaptureReady_ = ready;
+    calibrationResultAvailable_ = calibrationAvailable;
+    reconstructionResultAvailable_ = reconstructionAvailable;
     updateActionButtons();
 }
 
 void AcquisitionPanel::updateActionButtons()
 {
     const bool idle = !busy_;
+    workflowTabs_->tabBar()->setEnabled(idle);
     refreshButton_->setEnabled(idle && !calibrationCaptureActive_);
 
-    offlineCalibrationButton_->setEnabled(idle && !calibrationCaptureActive_);
-    startCalibrationCaptureButton_->setEnabled(idle && !calibrationCaptureActive_);
-    captureCalibrationFrameButton_->setEnabled(idle && calibrationCaptureActive_);
-    calibrateCapturedFramesButton_->setEnabled(idle && calibrationCapturedFrameCount_ > 0);
-    saveCalibrationResultButton_->setEnabled(idle && !calibrationCaptureActive_);
-    loadCalibrationResultButton_->setEnabled(idle && !calibrationCaptureActive_);
-    finishCalibrationCaptureButton_->setEnabled(idle && calibrationCaptureActive_);
+    captureCalibrationFrameButton_->setEnabled(idle);
+    const bool hasCalibrationDirectories = !leftCalibrationEdit_->text().trimmed().isEmpty() &&
+        !rightCalibrationEdit_->text().trimmed().isEmpty();
+    calibrateCapturedFramesButton_->setEnabled(idle && (hasCalibrationDirectories || calibrationCapturedFrameCount_ > 0));
+    exportCalibrationButton_->setEnabled(idle && calibrationResultAvailable_);
+    leftCalibrationEdit_->parentWidget()->setEnabled(idle);
+    rightCalibrationEdit_->parentWidget()->setEnabled(idle);
+    calibrationFileEdit_->parentWidget()->setEnabled(idle);
+    boardWidthSpin_->setEnabled(idle);
+    boardHeightSpin_->setEnabled(idle);
+    squareWidthSpin_->setEnabled(idle);
+    squareHeightSpin_->setEnabled(idle);
 
     startReconstructionCaptureButton_->setEnabled(idle && !calibrationCaptureActive_);
-    reconstructCapturedFramesButton_->setEnabled(idle && reconstructionCaptureReady_);
+    const bool hasReconstructionDirectories = !pathOf(leftReconstructionEdit_).empty() && !pathOf(rightReconstructionEdit_).empty();
+    reconstructCapturedFramesButton_->setEnabled(idle && hasReconstructionDirectories);
+    exportReconstructionButton_->setEnabled(idle && reconstructionResultAvailable_);
+    leftReconstructionEdit_->parentWidget()->setEnabled(idle);
+    rightReconstructionEdit_->parentWidget()->setEnabled(idle);
     galvoTotalRotationAngleSpin_->setEnabled(idle);
     galvoStepAngleSpin_->setEnabled(idle);
+    galvoSpeedSpin_->setEnabled(idle);
     rawGalvoCommandEdit_->setEnabled(idle && !calibrationCaptureActive_);
     rawGalvoCommandButton_->setEnabled(idle && !calibrationCaptureActive_);
 }

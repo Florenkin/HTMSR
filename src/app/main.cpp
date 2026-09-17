@@ -1,4 +1,5 @@
 #include "app/ui/MainWindow.h"
+#include "app/services/FileLogSink.h"
 #include "core/Types.h"
 
 #include <QApplication>
@@ -38,8 +39,26 @@ int main(int argc, char* argv[])
         QDir(applicationDirectory).filePath("styles")
     });
 
-    // 创建主窗口并显示，后续用户操作均由 MainWindow 分发到各业务服务。
-    htmsr::app::MainWindow window;
-    window.show();
-    return app.exec();
+    htmsr::app::FileLogSink fileLog;
+    int exitCode = 0;
+    {
+        // 文件日志先于窗口启动，并持续到后台任务和窗口完成销毁。
+        htmsr::app::MainWindow window;
+        window.show();
+        auto& logger = htmsr::Logger::instance();
+        if (fileLog.isActive()) {
+            logger.info("Logging", "运行日志：" + fileLog.filePath().toStdString());
+        } else {
+            logger.error("Logging", "无法创建运行日志：" + fileLog.lastError().toStdString());
+        }
+        if (fileLog.removedFileCount() > 0) {
+            logger.info("Logging", "已清理超过一天的日志文件：" + std::to_string(fileLog.removedFileCount()) + " 个");
+        }
+        if (!fileLog.cleanupFailures().isEmpty()) {
+            logger.warning("Logging", "以下过期日志无法清理：" + fileLog.cleanupFailures().join(", ").toStdString());
+        }
+        exitCode = app.exec();
+    }
+    htmsr::Logger::instance().info("App", "HTMSR stopped.");
+    return exitCode;
 }

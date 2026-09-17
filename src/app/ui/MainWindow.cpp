@@ -1,6 +1,9 @@
 #include "app/ui/MainWindow.h"
 
 #include "app/acquisition/GalvoController.h"
+#include "app/acquisition/GalvoCaptureSupport.h"
+#include "app/services/ReconstructionStorage.h"
+#include "app/services/ResultExportService.h"
 #if HTMSR_WITH_HIK_CAMERA
 #include "app/acquisition/HikCameraDevice.h"
 #endif
@@ -40,6 +43,7 @@
 #include <QStringList>
 #include <QTabWidget>
 #include <QToolBar>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QtConcurrent>
 
@@ -103,11 +107,14 @@ htmsr::ReconstructionResult failedReconstructionResult(const std::string& messag
     return result;
 }
 
-htmsr::ReconstructionResult runReconstructionTask(const htmsr::ReconstructionInput& input)
+htmsr::ReconstructionResult runReconstructionTask(const htmsr::ReconstructionInput& input,
+    const std::string& outputDirectory, const std::string& captureSessionDirectory)
 {
     try {
         htmsr::ReconstructionService service;
-        return service.reconstruct(input);
+        auto result = service.reconstruct(input);
+        htmsr::app::ReconstructionStorage::savePointClouds(outputDirectory, result, captureSessionDirectory);
+        return result;
     } catch (const cv::Exception& ex) {
         return failedReconstructionResult(std::string("OpenCV 重建异常：") + ex.what());
     } catch (const std::exception& ex) {
@@ -216,129 +223,23 @@ GalvoMotionVerificationResult configureAndVerifyGalvoMotionParameters(const Galv
 {
     SerialGalvoController controller(galvoConfig);
     try {
-        if (!controller.connect()) {
-            return {
-                false,
-                QString::fromUtf8("无法连接振镜串口：%1").arg(QString::fromStdString(galvoConfig.portName))
-            };
-        }
-
-        const auto reconnectController = [&controller, &galvoConfig]() {
-            controller.disconnect();
-            std::this_thread::sleep_for(std::chrono::milliseconds(80));
-            if (!controller.connect()) {
-                return false;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            return true;
-        };
-        const auto queryWithRecovery = [&reconnectController](const auto& query) {
-            GalvoCommandResult result;
-            for (int attempt = 0; attempt < 4; ++attempt) {
-                if (attempt > 0 && !reconnectController()) {
-                    result.success = false;
-                    result.message = "重新连接振镜串口失败。";
-                    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-                    continue;
-                }
-
-                result = query();
-                if (result.success) {
-                    return result;
-                }
-                if (attempt < 3) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-                }
-            }
-            return result;
-        };
-
-        constexpr double kStepAngleToleranceDeg = 0.006;
-        QString lastFailure = QString::fromUtf8("参数重新设置后回读验证失败。");
-        for (int configureAttempt = 0; configureAttempt < 3; ++configureAttempt) {
-            if (configureAttempt > 0 && !reconnectController()) {
-                lastFailure = QString::fromUtf8("参数验证失败后，重新连接振镜串口失败：%1")
-                    .arg(QString::fromStdString(galvoConfig.portName));
-                continue;
-            }
-
-            const auto stepSetResult = controller.setStepAngle(galvoConfig.stepAngleDeg);
-            if (!stepSetResult.success) {
-                lastFailure = QString::fromUtf8("振镜已连接，但重新设置步进角度失败：%1")
-                    .arg(QString::fromStdString(stepSetResult.message));
-                continue;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(80));
-
-            // 两个写入命令之间重新建立串口连接，避免振镜仍在处理步进角度
-            // 设置命令时丢弃紧随其后的自动旋转角度设置命令。
-            if (!reconnectController()) {
-                lastFailure = QString::fromUtf8("步进角度已重新设置，但发送自动旋转角度前重连振镜失败：%1")
-                    .arg(QString::fromStdString(galvoConfig.portName));
-                continue;
-            }
-
-            const auto autoRotationSetResult = controller.setAutoRotationAngle(galvoConfig.autoRotationAngleDeg);
-            if (!autoRotationSetResult.success) {
-                lastFailure = QString::fromUtf8("振镜已连接，但重新设置自动旋转角度失败：%1")
-                    .arg(QString::fromStdString(autoRotationSetResult.message));
-                continue;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-
-            double actualStepAngle = 0.0;
-            const GalvoCommandResult stepQueryResult = queryWithRecovery([&]() {
-                return controller.getStepAngle(actualStepAngle);
-            });
-            if (!stepQueryResult.success) {
-                lastFailure = QString::fromUtf8("步进角度已重新设置，但回读验证失败：%1")
-                    .arg(QString::fromStdString(stepQueryResult.message));
-                continue;
-            }
-
-            int actualAutoRotationAngle = 0;
-            const GalvoCommandResult autoRotationQueryResult = queryWithRecovery([&]() {
-                return controller.getAutoRotationAngle(actualAutoRotationAngle);
-            });
-            if (!autoRotationQueryResult.success) {
-                lastFailure = QString::fromUtf8("自动旋转角度已重新设置，但回读验证失败：%1")
-                    .arg(QString::fromStdString(autoRotationQueryResult.message));
-                continue;
-            }
-
-            if (std::abs(actualStepAngle - galvoConfig.stepAngleDeg) > kStepAngleToleranceDeg) {
-                lastFailure = QString::fromUtf8("步进角度重新设置后仍不一致：界面 %1°，设备实际 %2°")
-                    .arg(galvoConfig.stepAngleDeg, 0, 'f', 4)
-                    .arg(actualStepAngle, 0, 'f', 4);
-                continue;
-            }
-            if (actualAutoRotationAngle != galvoConfig.autoRotationAngleDeg) {
-                lastFailure = QString::fromUtf8("自动旋转角度重新设置后仍不一致：界面 %1°，设备实际 %2°")
-                    .arg(galvoConfig.autoRotationAngleDeg)
-                    .arg(actualAutoRotationAngle);
-                continue;
-            }
-
-            controller.disconnect();
-            return {
-                true,
-                QString::fromUtf8("振镜已连接，参数重新设置并验证通过：步进 %1°，自动旋转 %2°")
-                    .arg(actualStepAngle, 0, 'f', 4)
-                    .arg(actualAutoRotationAngle),
-                actualStepAngle,
-                actualAutoRotationAngle,
-                QString::fromStdString(galvoConfig.portName)
-            };
-        }
-
+        const auto motion = configureAndVerifyGalvoMotion(controller, galvoConfig);
         controller.disconnect();
-        return { false, lastFailure };
+        return {
+            true,
+            QString::fromUtf8("振镜已连接，参数重新设置并验证通过：步进 %1°，自动旋转 %2°")
+                .arg(motion.stepAngleDeg, 0, 'f', 4)
+                .arg(motion.totalRotationAngleDeg),
+            motion.stepAngleDeg,
+            motion.totalRotationAngleDeg,
+            QString::fromStdString(motion.portName)
+        };
     } catch (const std::exception& ex) {
         controller.disconnect();
-        return { false, QString::fromUtf8("振镜连接或参数回读异常：%1").arg(QString::fromUtf8(ex.what())) };
+        return {false, QString::fromUtf8("振镜连接或参数回读异常：%1").arg(QString::fromUtf8(ex.what()))};
     } catch (...) {
         controller.disconnect();
-        return { false, QString::fromUtf8("振镜连接或参数回读发生未知异常。") };
+        return {false, QString::fromUtf8("振镜连接或参数回读发生未知异常。")};
     }
 }
 
@@ -391,7 +292,6 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&calibrationWatcher_, &QFutureWatcher<CalibrationResult>::finished, this, &MainWindow::onCalibrationFinished);
     connect(&reconstructionWatcher_, &QFutureWatcher<ReconstructionResult>::finished, this, &MainWindow::onReconstructionFinished);
     connect(&acquisitionWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onAcquisitionFinished);
-    connect(&calibrationCaptureStartWatcher_, &QFutureWatcher<CalibrationCaptureSessionState>::finished, this, &MainWindow::onCalibrationCaptureStarted);
     connect(&calibrationFrameWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onCalibrationFrameCaptured);
     connect(&reconstructionCaptureWatcher_, &QFutureWatcher<AcquisitionSessionResult>::finished, this, &MainWindow::onReconstructionCaptureFinished);
     connect(&autoCalibrationWatcher_, &QFutureWatcher<IntegratedWorkflowResult>::finished, this, &MainWindow::onAutoCalibrationFinished);
@@ -401,15 +301,14 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&serialCommandPackWatcher_, &QFutureWatcher<SerialCommandPackSendResult>::finished, this, &MainWindow::onSerialCommandPackFinished);
     connect(serialCommandPackWidget_, &SerialCommandPackWidget::sendRequested, this, &MainWindow::sendSerialCommandPack);
     connect(acquisitionPanel_, &AcquisitionPanel::refreshDevicesRequested, this, &MainWindow::refreshAcquisitionDevices);
-    connect(acquisitionPanel_, &AcquisitionPanel::offlineCalibrationRequested, this, &MainWindow::runCalibration);
-    connect(acquisitionPanel_, &AcquisitionPanel::startCalibrationCaptureRequested, this, &MainWindow::startCalibrationCapture);
     connect(acquisitionPanel_, &AcquisitionPanel::captureCalibrationFrameRequested, this, &MainWindow::captureCalibrationFrame);
     connect(acquisitionPanel_, &AcquisitionPanel::calibrateCapturedFramesRequested, this, &MainWindow::calibrateCapturedFrames);
-    connect(acquisitionPanel_, &AcquisitionPanel::saveCalibrationResultRequested, this, &MainWindow::saveCalibrationResult);
-    connect(acquisitionPanel_, &AcquisitionPanel::loadCalibrationResultRequested, this, &MainWindow::loadCalibrationResult);
+    connect(acquisitionPanel_, &AcquisitionPanel::exportCalibrationRequested, this, &MainWindow::exportCalibration);
+    connect(acquisitionPanel_, &AcquisitionPanel::calibrationFileSelected, this, &MainWindow::loadCalibrationFile);
     connect(acquisitionPanel_, &AcquisitionPanel::finishCalibrationCaptureRequested, this, &MainWindow::finishCalibrationCapture);
     connect(acquisitionPanel_, &AcquisitionPanel::startReconstructionCaptureRequested, this, &MainWindow::startReconstructionCapture);
     connect(acquisitionPanel_, &AcquisitionPanel::reconstructCapturedFramesRequested, this, &MainWindow::reconstructCapturedFrames);
+    connect(acquisitionPanel_, &AcquisitionPanel::exportReconstructionRequested, this, &MainWindow::exportReconstruction);
     connect(acquisitionPanel_, &AcquisitionPanel::sendRawGalvoCommandRequested, this, &MainWindow::sendRawGalvoCommand);
     connect(acquisitionPanel_, &AcquisitionPanel::cameraConfigChanged, this, &MainWindow::restartLivePreview);
     connect(acquisitionPanel_, &AcquisitionPanel::galvoConfigChanged, this, [this]() {
@@ -419,7 +318,9 @@ MainWindow::MainWindow(QWidget* parent)
 
     refreshAcquisitionDevices();
     startLivePreview();
-    updateGalvoStatusBar(acquisitionPanel_->integratedScanConfig(), QString::fromUtf8("未连接"));
+    updateGalvoStatusBar(acquisitionPanel_->integratedScanConfig(),
+        acquisitionPanel_->integratedScanConfig().galvo.portName.empty()
+            ? QString::fromUtf8("未识别到振镜串口") : QString::fromUtf8("串口已识别，通信待验证"));
     Logger::instance().info("App", "HTMSR started.");
 }
 
@@ -431,7 +332,6 @@ MainWindow::~MainWindow()
     disconnect(&calibrationWatcher_, nullptr, this, nullptr);
     disconnect(&reconstructionWatcher_, nullptr, this, nullptr);
     disconnect(&acquisitionWatcher_, nullptr, this, nullptr);
-    disconnect(&calibrationCaptureStartWatcher_, nullptr, this, nullptr);
     disconnect(&calibrationFrameWatcher_, nullptr, this, nullptr);
     disconnect(&reconstructionCaptureWatcher_, nullptr, this, nullptr);
     disconnect(&autoCalibrationWatcher_, nullptr, this, nullptr);
@@ -453,10 +353,6 @@ MainWindow::~MainWindow()
     if (acquisitionWatcher_.isRunning()) {
         acquisitionWatcher_.cancel();
         acquisitionWatcher_.waitForFinished();
-    }
-    if (calibrationCaptureStartWatcher_.isRunning()) {
-        calibrationCaptureStartWatcher_.cancel();
-        calibrationCaptureStartWatcher_.waitForFinished();
     }
     if (calibrationFrameWatcher_.isRunning()) {
         calibrationFrameWatcher_.cancel();
@@ -492,6 +388,8 @@ MainWindow::~MainWindow()
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     shuttingDown_.store(true);
+    acquisitionPanel_->commitPendingEdits();
+    configService_.save(acquisitionPanel_->projectConfig());
     serialCommandPackStopRequested_->store(true);
     stopLivePreview();
     QCoreApplication::removePostedEvents(this);
@@ -507,16 +405,30 @@ void MainWindow::closeEvent(QCloseEvent* event)
 */
 void MainWindow::runCalibration()
 {
-    if (calibrationWatcher_.isRunning()) {
+    if (busy_ || calibrationWatcher_.isRunning()) {
         return;
     }
 
+    acquisitionPanel_->commitPendingEdits();
     CalibrationInput input = acquisitionPanel_->calibrationInput();
-    if (QString::fromStdString(input.outputFile).trimmed().isEmpty()) {
-        const QString filePath = defaultCalibrationFilePath();
-        input.outputFile = filePath.toStdString();
-        acquisitionPanel_->setCalibrationFile(input.outputFile);
+    if (input.leftDirectory.empty() && input.rightDirectory.empty()) {
+        const auto captured = calibrationCaptureSessionService_.currentResult();
+        if (captured.capturedFrameCount > 0) {
+            input.leftDirectory = captured.leftDirectory;
+            input.rightDirectory = captured.rightDirectory;
+        }
     }
+    if (!QFileInfo(QString::fromStdString(input.leftDirectory)).isDir() ||
+        !QFileInfo(QString::fromStdString(input.rightDirectory)).isDir()) {
+        QMessageBox::warning(this, QString::fromUtf8("缺少标定图像"),
+            QString::fromUtf8("请先采集标定帧，或选择有效的左、右标定目录。"));
+        return;
+    }
+
+    // 每次标定生成新的结果文件，并由 CalibrationService 在成功后自动保存。
+    input.outputFile = defaultCalibrationFilePath().toStdString();
+    pendingCalibrationInput_ = input;
+    finishCalibrationCapture();
 
     setBusy(true, QString::fromUtf8("标定中..."), true);
     calibrationWatcher_.setFuture(QtConcurrent::run([input]() {
@@ -541,122 +453,65 @@ void MainWindow::loadCalibration()
         return;
     }
 
-    CalibrationResult loaded;
-    if (calibrationService_.loadCalibration(file.toStdString(), loaded)) {
-        calibration_ = loaded;
-        Logger::instance().info("App", "Calibration loaded from UI.");
-    } else {
-        QMessageBox::warning(this, QString::fromUtf8("加载失败"), QString::fromUtf8("标定文件无效或无法读取。"));
-    }
+    loadCalibrationFile(file);
 }
 
-/*
-    函数功能：使用当前参数和标定结果在后台启动离线重建任务
-    输入：
-        无
-    输出：
-        无（函数会校验标定结果并启动异步重建）
-*/
-void MainWindow::runReconstruction()
+void MainWindow::exportCalibration()
 {
-    try {
-        if (reconstructionWatcher_.isRunning()) {
-            return;
-        }
-
-        if (!calibration_.isValid()) {
-            const auto file = acquisitionPanel_->calibrationInput().outputFile;
-            calibrationService_.loadCalibration(file, calibration_);
-        }
-        if (!calibration_.isValid()) {
-            QMessageBox::warning(this, QString::fromUtf8("缺少标定"), QString::fromUtf8("请先完成标定或加载有效标定文件。"));
-            return;
-        }
-
-        const ReconstructionInput input = acquisitionPanel_->reconstructionInput(calibration_);
-        autoExportReconstructionOnFinish_ = false;
-        setBusy(true, QString::fromUtf8("重建中..."), true);
-        reconstructionWatcher_.setFuture(QtConcurrent::run(runReconstructionTask, input));
-    } catch (const cv::Exception& ex) {
-        autoExportReconstructionOnFinish_ = false;
-        setBusy(false, QString());
-        Logger::instance().error("Reconstruction", std::string("Failed to start reconstruction: ") + ex.what());
-        QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromUtf8("启动重建时发生 OpenCV 异常：%1").arg(QString::fromStdString(ex.what())));
-    } catch (const std::exception& ex) {
-        autoExportReconstructionOnFinish_ = false;
-        setBusy(false, QString());
-        Logger::instance().error("Reconstruction", std::string("Failed to start reconstruction: ") + ex.what());
-        QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromStdString(ex.what()));
-    } catch (...) {
-        autoExportReconstructionOnFinish_ = false;
-        setBusy(false, QString());
-        Logger::instance().error("Reconstruction", "Failed to start reconstruction with an unknown exception.");
-        QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromUtf8("启动重建时发生未知异常。"));
-    }
-}
-
-/*
-    函数功能：导出当前重建结果为 txt 点云文件
-    输入：
-        无
-    输出：
-        无（导出成功时写文件，失败时给出错误提示）
-*/
-void MainWindow::exportTxt()
-{
-    if (reconstruction_.mergedPoints.empty()) {
-        QMessageBox::information(this, QString::fromUtf8("无点云"), QString::fromUtf8("当前没有可导出的点云。"));
+    if (busy_) {
         return;
     }
-
-    const QString fileName = "point_cloud_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz") + ".txt";
-    const QString file = QFileDialog::getSaveFileName(this, QString::fromUtf8("导出 TXT"), outputPath(fileName), QString::fromUtf8("TXT (*.txt);;所有文件 (*.*)"));
-    if (file.isEmpty()) {
+    if (!calibration_.isValid()) {
+        QMessageBox::information(this, QString::fromUtf8("无标定结果"), QString::fromUtf8("请先完成标定或加载有效标定文件。"));
         return;
     }
-
     try {
-        pointCloudService_.saveTxt(file.toStdString(), reconstruction_.mergedPoints);
+        const QString file = QFileDialog::getSaveFileName(this, QString::fromUtf8("导出标定结果"),
+            defaultCalibrationFilePath(), QString::fromUtf8("标定文件 (*.yml *.yaml)"));
+        if (file.isEmpty()) {
+            return;
+        }
+        setBusy(true, QString::fromUtf8("正在导出标定结果..."), true);
+        const QString exported = ResultExportService::exportCalibration(file, calibration_);
+        setBusy(false, QString());
+        statusBar()->showMessage(QString::fromUtf8("标定结果已导出：%1").arg(exported), 10000);
     } catch (const std::exception& ex) {
-        Logger::instance().error("PointCloud", ex.what());
+        setBusy(false, QString());
+        Logger::instance().error("Calibration", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("导出失败"), QString::fromStdString(ex.what()));
     }
 }
 
-/*
-    函数功能：导出当前重建结果为 pcd 点云文件
-    输入：
-        无
-    输出：
-        无（导出成功时写文件，失败时给出错误提示）
-*/
-void MainWindow::exportPcd()
+void MainWindow::exportReconstruction()
 {
-    if (reconstruction_.mergedPoints.empty()) {
-        QMessageBox::information(this, QString::fromUtf8("无点云"), QString::fromUtf8("当前没有可导出的点云。"));
+    if (busy_) {
         return;
     }
-
-    const QString fileName = "point_cloud_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz") + ".pcd";
-    const QString file = QFileDialog::getSaveFileName(this, QString::fromUtf8("导出 PCD"), outputPath(fileName), QString::fromUtf8("PCD (*.pcd);;所有文件 (*.*)"));
-    if (file.isEmpty()) {
+    if (!reconstruction_.success || reconstruction_.mergedPoints.empty()) {
+        QMessageBox::information(this, QString::fromUtf8("无点云"), QString::fromUtf8("请先完成重建。"));
         return;
     }
-
     try {
-        pointCloudService_.savePcd(file.toStdString(), reconstruction_.mergedPoints);
+        const QString pcdFilter = QString::fromUtf8("PCD 点云 (*.pcd)");
+        const QString txtFilter = QString::fromUtf8("TXT 点云 (*.txt)");
+        QString selectedFilter = pcdFilter;
+        const QString name = "point_cloud_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz") + ".pcd";
+        const QString directory = ReconstructionStorage::resultsDirectory(acquisitionPanel_->projectConfig().outputDirectory);
+        const QString file = QFileDialog::getSaveFileName(this, QString::fromUtf8("导出点云"),
+            QDir(directory).filePath(name), pcdFilter + ";;" + txtFilter, &selectedFilter);
+        if (file.isEmpty()) {
+            return;
+        }
+        setBusy(true, QString::fromUtf8("正在导出点云..."), true);
+        const auto format = selectedFilter == txtFilter ? PointCloudExportFormat::Txt : PointCloudExportFormat::Pcd;
+        const QString exported = ResultExportService::exportPointCloud(file, reconstruction_, format);
+        setBusy(false, QString());
+        statusBar()->showMessage(QString::fromUtf8("点云已导出：%1").arg(exported), 10000);
     } catch (const std::exception& ex) {
+        setBusy(false, QString());
         Logger::instance().error("PointCloud", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("导出失败"), QString::fromStdString(ex.what()));
     }
-}
-
-// 将当前项目参数持久化到配置中。
-void MainWindow::saveProjectSettings()
-{
-    configService_.save(acquisitionPanel_->projectConfig());
-    refreshProjectTree();
-    Logger::instance().info("App", "Project settings saved.");
 }
 
 /*
@@ -668,9 +523,21 @@ void MainWindow::saveProjectSettings()
 */
 void MainWindow::refreshAcquisitionDevices()
 {
+    const auto ports = enumerateSerialPortNames();
+    acquisitionPanel_->setSerialPorts(ports);
+    if (ports.empty()) {
+        Logger::instance().warning("Galvo", "未检测到在线串口。请检查振镜 USB 连接、供电及驱动。");
+    } else {
+        QStringList names;
+        for (const auto& port : ports) {
+            names.append(QString::fromStdString(port));
+        }
+        Logger::instance().info("Galvo", "检测到在线串口：" + names.join(", ").toStdString());
+    }
     try {
         const auto devices = acquisitionService_.enumerateDevices();
         acquisitionPanel_->setDevices(devices);
+        Logger::instance().info("Acquisition", "刷新设备完成，相机数量：" + std::to_string(devices.size()));
     } catch (const std::exception& ex) {
         Logger::instance().error("Acquisition", ex.what());
         acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
@@ -766,157 +633,72 @@ void MainWindow::runScanAndReconstruct()
     }));
 }
 
-void MainWindow::startCalibrationCapture()
-{
-    if (calibrationCaptureStartWatcher_.isRunning() || calibrationCaptureSessionService_.isActive()) {
-        return;
-    }
-
-    StereoCameraConfig config = acquisitionPanel_->stereoCameraConfig();
-    if (config.outputDirectory.empty()) {
-        config.outputDirectory = acquisitionPanel_->projectConfig().outputDirectory;
-    }
-
-    setBusy(true, QString::fromUtf8("开始标定采集中..."));
-    acquisitionPanel_->setStatusText(QString::fromUtf8("正在连接相机并创建标定采集会话..."));
-    calibrationCaptureStartWatcher_.setFuture(QtConcurrent::run([this, config]() {
-        return runWorkerTask("Start calibration capture", [this, config]() {
-            return calibrationCaptureSessionService_.start(config);
-        });
-    }));
-}
-
 void MainWindow::captureCalibrationFrame()
 {
-    if (calibrationFrameWatcher_.isRunning() || !calibrationCaptureSessionService_.isActive()) {
+    if (busy_ || calibrationFrameWatcher_.isRunning()) {
         return;
     }
 
+    const StereoCameraConfig config = acquisitionPanel_->stereoCameraConfig();
+    if (!config.useMockProvider && (config.leftDeviceId.empty() || config.rightDeviceId.empty() ||
+        config.leftDeviceId == config.rightDeviceId)) {
+        QMessageBox::warning(this, QString::fromUtf8("无法采集标定帧"), QString::fromUtf8("请先选择两台不同的相机。"));
+        return;
+    }
     setBusy(true, QString::fromUtf8("采集当前标定帧..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在采集当前标定帧..."));
-    calibrationFrameWatcher_.setFuture(QtConcurrent::run([this]() {
-        return runWorkerTask("Capture calibration frame", [this]() {
-            return calibrationCaptureSessionService_.captureCurrentFrame();
+    calibrationFrameWatcher_.setFuture(QtConcurrent::run([this, config]() {
+        return runWorkerTask("Capture calibration frame", [this, config]() {
+            return calibrationCaptureSessionService_.captureCurrentFrame(config);
         });
     }));
 }
 
 void MainWindow::calibrateCapturedFrames()
 {
-    if (calibrationWatcher_.isRunning()) {
-        return;
-    }
-
-    calibrationCapture_ = calibrationCaptureSessionService_.currentResult();
-    if (calibrationCapture_.capturedFrameCount <= 0) {
-        QMessageBox::warning(this, QString::fromUtf8("缺少标定帧"), QString::fromUtf8("请先采集至少一组左右标定图像。"));
-        return;
-    }
-    if (calibrationCapture_.capturedFrameCount < 6) {
-        const auto reply = QMessageBox::question(
-            this,
-            QString::fromUtf8("标定帧较少"),
-            QString::fromUtf8("当前只采集了 %1 帧，标定精度可能不足。是否继续？").arg(calibrationCapture_.capturedFrameCount));
-        if (reply != QMessageBox::Yes) {
-            return;
-        }
-    }
-
-    CalibrationInput input = acquisitionPanel_->calibrationInput();
-    input.leftDirectory = calibrationCapture_.leftDirectory;
-    input.rightDirectory = calibrationCapture_.rightDirectory;
-    if (QString::fromStdString(input.outputFile).trimmed().isEmpty()) {
-        const QString filePath = defaultCalibrationFilePath();
-        input.outputFile = filePath.toStdString();
-        acquisitionPanel_->setCalibrationFile(input.outputFile);
-    }
-
-    setBusy(true, QString::fromUtf8("标定当前采集帧..."), true);
-    acquisitionPanel_->setStatusText(QString::fromUtf8("正在标定当前采集帧..."));
-    calibrationWatcher_.setFuture(QtConcurrent::run([input]() {
-        return runWorkerTask("Calibration", [input]() {
-            CalibrationService service;
-            return service.calibrate(input);
-        });
-    }));
+    runCalibration();
 }
 
 /*
-    函数功能：将当前内存中的双目标定结果保存到在线标定结果文件夹
+    函数功能：选择或输入标定文件路径后直接加载标定结果
     输入：
-        无
-    输出：
-        无（函数会按时间戳生成 yml 文件，并把该文件路径回填为当前标定文件）
-*/
-void MainWindow::saveCalibrationResult()
-{
-    if (!calibration_.isValid()) {
-        QMessageBox::warning(this, QString::fromUtf8("缺少标定结果"), QString::fromUtf8("请先完成一次有效标定，再保存标定结果。"));
-        return;
-    }
-
-    const QString resultDirectory = calibrationResultsDirectory();
-    if (!QDir().mkpath(resultDirectory)) {
-        QMessageBox::critical(this, QString::fromUtf8("保存失败"), QString::fromUtf8("无法创建标定结果文件夹：%1").arg(resultDirectory));
-        return;
-    }
-
-    const QString fileName = "stereo_calibration_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz") + ".yml";
-    const QString filePath = QDir(resultDirectory).filePath(fileName);
-
-    try {
-        calibrationService_.saveCalibration(filePath.toStdString(), calibration_);
-        acquisitionPanel_->setCalibrationFile(filePath.toStdString());
-        configService_.save(acquisitionPanel_->projectConfig());
-        acquisitionPanel_->setStatusText(QString::fromUtf8("标定结果已保存：%1").arg(filePath));
-        acquisitionPanel_->setResultSummary(QString::fromUtf8("标定文件: %1 | RMS: %2").arg(fileName).arg(calibration_.rms));
-        refreshProjectTree();
-        Logger::instance().info("Calibration", "Timestamped calibration result saved: " + filePath.toStdString());
-        QMessageBox::information(this, QString::fromUtf8("保存完成"), QString::fromUtf8("标定结果已保存到：\n%1").arg(filePath));
-    } catch (const std::exception& ex) {
-        Logger::instance().error("Calibration", ex.what());
-        QMessageBox::critical(this, QString::fromUtf8("保存失败"), QString::fromStdString(ex.what()));
-    }
-}
-
-/*
-    函数功能：从在线标定结果文件夹加载历史双目标定文件
-    输入：
-        无
+        file：用户选择的标定文件路径
     输出：
         无（加载成功后会更新当前标定结果和参数面板中的标定文件路径）
 */
-void MainWindow::loadCalibrationResult()
+void MainWindow::loadCalibrationFile(const QString& file)
 {
-    const QString resultDirectory = calibrationResultsDirectory();
-    QDir().mkpath(resultDirectory);
-    const QString file = QFileDialog::getOpenFileName(
-        this,
-        QString::fromUtf8("加载标定结果"),
-        resultDirectory,
-        QString::fromUtf8("YAML (*.yml *.yaml);;所有文件 (*.*)"));
-    if (file.isEmpty()) {
+    if (busy_ || shuttingDown_.load()) {
         return;
     }
-
+    finishCalibrationCapture();
+    acquisitionPanel_->setCalibrationFile(file.trimmed().toStdString());
+    calibration_ = CalibrationResult{};
+    updateResultAvailability();
+    if (file.trimmed().isEmpty()) {
+        return;
+    }
     CalibrationResult loaded;
-    if (!calibrationService_.loadCalibration(file.toStdString(), loaded)) {
+    if (!calibrationService_.loadCalibration(file.trimmed().toStdString(), loaded)) {
         QMessageBox::warning(this, QString::fromUtf8("加载失败"), QString::fromUtf8("标定文件无效或无法读取。"));
         return;
     }
 
     calibration_ = loaded;
-    acquisitionPanel_->setCalibrationFile(file.toStdString());
+    updateResultAvailability();
     configService_.save(acquisitionPanel_->projectConfig());
     acquisitionPanel_->setStatusText(QString::fromUtf8("已加载标定结果：%1").arg(file));
     acquisitionPanel_->setResultSummary(QString::fromUtf8("标定文件: %1 | RMS: %2").arg(QFileInfo(file).fileName()).arg(calibration_.rms));
     refreshProjectTree();
-    Logger::instance().info("Calibration", "Calibration result loaded from result folder: " + file.toStdString());
-    QMessageBox::information(this, QString::fromUtf8("加载完成"), QString::fromUtf8("已加载标定结果。RMS: %1").arg(calibration_.rms));
+    Logger::instance().info("Calibration", "Calibration result loaded from selected file: " + file.toStdString());
+    statusBar()->showMessage(QString::fromUtf8("已加载标定文件：%1 | RMS: %2").arg(file).arg(calibration_.rms));
 }
 
 void MainWindow::finishCalibrationCapture()
 {
+    if (busy_ || !calibrationCaptureSessionService_.isActive()) {
+        return;
+    }
     stopLivePreview();
     calibrationCaptureSessionService_.finish();
     calibrationCapture_ = calibrationCaptureSessionService_.currentResult();
@@ -952,7 +734,6 @@ void MainWindow::startReconstructionCapture()
     pendingReconstructionCaptureConfig_ = config;
     setBusy(true, QString::fromUtf8("正在重新设置并确认振镜参数..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在连接振镜，重新设置步进角度和自动旋转角度，然后回读验证..."));
-    acquisitionPanel_->setReconstructionCaptureReady(false);
     reconstructionGalvoPreflightWatcher_.setFuture(QtConcurrent::run([galvoConfig = config.galvo]() {
         return configureAndVerifyGalvoMotionParameters(galvoConfig);
     }));
@@ -986,6 +767,8 @@ void MainWindow::onReconstructionGalvoPreflightFinished()
     config.totalRotationAngleDeg = result.actualTotalAngleDeg;
     config.galvo.autoRotationAngleDeg = result.actualTotalAngleDeg;
     config.galvo.stepAngleDeg = result.actualStepAngleDeg;
+    config.verifiedGalvoMotion = VerifiedGalvoMotionParameters{
+        result.portName.toStdString(), result.actualStepAngleDeg, result.actualTotalAngleDeg};
     acquisitionPanel_->setFrameCountFromDevice(result.actualStepAngleDeg, result.actualTotalAngleDeg);
     Logger::instance().info("Galvo", (result.message + QString::fromUtf8("，本次采集 %1 帧").arg(config.stereoCamera.frameCount)).toStdString());
     beginReconstructionCapture(config);
@@ -996,7 +779,6 @@ void MainWindow::beginReconstructionCapture(const IntegratedScanConfig& config)
 {
     statusBar()->showMessage(QString::fromUtf8("重建采集中..."));
     acquisitionPanel_->setStatusText(QString::fromUtf8("正在采集重建图像序列..."));
-    acquisitionPanel_->setReconstructionCaptureReady(false);
     reconstructionCaptureWatcher_.setFuture(QtConcurrent::run([this, config]() {
         return runWorkerTask("Reconstruction capture", [this, config]() {
             return reconstructionCaptureSessionService_.capture(config, [this](int, int, const FramePair& frame) {
@@ -1013,8 +795,16 @@ void MainWindow::reconstructCapturedFrames()
             return;
         }
 
-        if (reconstructionCapture_.capturedFrameCount <= 0) {
-            QMessageBox::warning(this, QString::fromUtf8("缺少重建帧"), QString::fromUtf8("请先执行开始重建采集。"));
+        ReconstructionInput input = acquisitionPanel_->reconstructionInput(calibration_);
+        if (input.leftDirectory.empty() || input.rightDirectory.empty()) {
+            QMessageBox::warning(this, QString::fromUtf8("缺少重建目录"), QString::fromUtf8("请选择左右重建目录，或先点击重建页的“采集”。"));
+            return;
+        }
+        const QFileInfo leftDirectory(QString::fromStdString(input.leftDirectory));
+        const QFileInfo rightDirectory(QString::fromStdString(input.rightDirectory));
+        if (!leftDirectory.isDir() || !rightDirectory.isDir()) {
+            QMessageBox::warning(this, QString::fromUtf8("重建目录无效"),
+                QString::fromUtf8("请选择存在的左右重建图像目录。"));
             return;
         }
 
@@ -1027,25 +817,24 @@ void MainWindow::reconstructCapturedFrames()
             return;
         }
 
-        ReconstructionInput input = acquisitionPanel_->reconstructionInput(calibration_);
-        input.leftDirectory = reconstructionCapture_.leftDirectory;
-        input.rightDirectory = reconstructionCapture_.rightDirectory;
-        autoExportReconstructionOnFinish_ = true;
+        input.calibration = calibration_;
+        const auto outputDirectory = acquisitionPanel_->projectConfig().outputDirectory;
+        Logger::instance().info("Reconstruction", "重建图像目录：左=" + input.leftDirectory + "，右=" + input.rightDirectory);
+        const std::string captureSessionDirectory = leftDirectory.absolutePath() == rightDirectory.absolutePath()
+            ? leftDirectory.absolutePath().toStdString() : std::string{};
         setBusy(true, QString::fromUtf8("重建当前采集帧..."), true);
         acquisitionPanel_->setStatusText(QString::fromUtf8("正在重建当前采集帧..."));
-        reconstructionWatcher_.setFuture(QtConcurrent::run(runReconstructionTask, input));
+        reconstructionWatcher_.setFuture(QtConcurrent::run(runReconstructionTask, input, outputDirectory,
+            captureSessionDirectory));
     } catch (const cv::Exception& ex) {
-        autoExportReconstructionOnFinish_ = false;
         setBusy(false, QString());
         Logger::instance().error("Reconstruction", std::string("Failed to start captured-frame reconstruction: ") + ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromUtf8("启动当前采集帧重建时发生 OpenCV 异常：%1").arg(QString::fromStdString(ex.what())));
     } catch (const std::exception& ex) {
-        autoExportReconstructionOnFinish_ = false;
         setBusy(false, QString());
         Logger::instance().error("Reconstruction", std::string("Failed to start captured-frame reconstruction: ") + ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromStdString(ex.what()));
     } catch (...) {
-        autoExportReconstructionOnFinish_ = false;
         setBusy(false, QString());
         Logger::instance().error("Reconstruction", "Failed to start captured-frame reconstruction with an unknown exception.");
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromUtf8("启动当前采集帧重建时发生未知异常。"));
@@ -1073,7 +862,7 @@ void MainWindow::sendRawGalvoCommand(const QString& commandText)
     try {
         serialCommandPackWidget_->setRawGalvoResponseText(QString::fromUtf8("等待返回..."));
         if (!controller.connect()) {
-            throw std::runtime_error("Failed to open galvo serial port: " + config.galvo.portName);
+            throw std::runtime_error(controller.lastError());
         }
 
         const auto result = controller.sendRawCommand(command, true);
@@ -1163,8 +952,8 @@ void MainWindow::sendSerialCommandPack(const QString& name, const QString& conte
             const std::string context = "命令包 [" + name.toStdString() + "]";
             Logger::instance().info("SerialPack", context + " 开始发送，串口=" + galvoConfig.portName);
             if (!controller.connect()) {
-                summary.message = QString::fromUtf8("%1：无法打开串口 %2。")
-                    .arg(name, QString::fromStdString(galvoConfig.portName));
+                summary.message = QString::fromUtf8("%1：%2")
+                    .arg(name, QString::fromStdString(controller.lastError()));
                 Logger::instance().error("SerialPack", summary.message.toStdString());
                 return summary;
             }
@@ -1177,7 +966,7 @@ void MainWindow::sendSerialCommandPack(const QString& name, const QString& conte
                     break;
                 }
                 if (step.type == SerialCommandPackStep::Type::Wait) {
-                    Logger::instance().info("SerialPack", context + " 第" + std::to_string(step.lineNumber) +
+                    Logger::instance().debug("SerialPack", context + " 第" + std::to_string(step.lineNumber) +
                         "行：等待 " + std::to_string(step.waitMs) + " ms");
                     int remaining = step.waitMs;
                     while (remaining > 0 && !stopRequested->load()) {
@@ -1191,7 +980,7 @@ void MainWindow::sendSerialCommandPack(const QString& name, const QString& conte
                 const QString hex = bytesToHexText(step.command);
                 const std::string stepContext = context + " 第" + std::to_string(step.lineNumber) +
                     "行：" + hex.toStdString();
-                Logger::instance().info("SerialPack", stepContext + " 准备发送" +
+                Logger::instance().debug("SerialPack", stepContext + " 准备发送" +
                     (step.expectResponse ? "（等待返回）" : "（不等待返回）"));
                 const auto result = controller.sendRawCommand(step.command, step.expectResponse);
                 if (!result.response.empty()) {
@@ -1216,7 +1005,7 @@ void MainWindow::sendSerialCommandPack(const QString& name, const QString& conte
                         summary.laserEnabled = step.command[3] == 0x1A;
                     }
                 }
-                Logger::instance().info("SerialPack", stepContext +
+                Logger::instance().debug("SerialPack", stepContext +
                     (step.expectResponse
                         ? " 已收到返回：" + bytesToHexText(result.response).toStdString()
                         : " 串口写入成功；设备动作未确认"));
@@ -1290,7 +1079,7 @@ void MainWindow::applyGalvoMotionParameters()
     galvoMotionParametersWatcher_.setFuture(QtConcurrent::run([galvoConfig]() -> GalvoMotionVerificationResult {
         SerialGalvoController controller(galvoConfig);
         if (!controller.connect()) {
-            return { false, QString::fromUtf8("无法打开振镜串口：%1").arg(QString::fromStdString(galvoConfig.portName)) };
+            return { false, QString::fromStdString(controller.lastError()) };
         }
 
         const auto checkSetResult = [](const GalvoCommandResult& result, const char* action) {
@@ -1307,10 +1096,10 @@ void MainWindow::applyGalvoMotionParameters()
             // Match the reliable manual-query path: reopen the port after the
             // write-only commands so any device-side acknowledgement or
             // parser state cannot affect the following readback.
-            const auto reopenController = [&controller, &galvoConfig]() {
+            const auto reopenController = [&controller]() {
                 controller.disconnect();
                 if (!controller.connect()) {
-                    throw std::runtime_error("重新打开振镜串口失败：" + galvoConfig.portName);
+                    throw std::runtime_error(controller.lastError());
                 }
             };
             reopenController();
@@ -1436,14 +1225,16 @@ void MainWindow::onCalibrationFinished()
     setBusy(false, QString());
     try {
         calibration_ = calibrationWatcher_.result();
-        if (!calibrationCapture_.leftDirectory.empty() && !calibrationCapture_.rightDirectory.empty()) {
-            acquisitionPanel_->setCalibrationDirectories(calibrationCapture_.leftDirectory, calibrationCapture_.rightDirectory);
-            acquisitionPanel_->setResultSummary(QString::fromUtf8("RMS: %1 | 标定帧: %2")
-                .arg(calibration_.rms)
-                .arg(calibrationCapture_.capturedFrameCount));
-            refreshProjectTree();
-        }
-        QMessageBox::information(this, QString::fromUtf8("标定完成"), QString::fromUtf8("双目标定完成。RMS: %1").arg(calibration_.rms));
+        updateResultAvailability();
+        acquisitionPanel_->setCalibrationDirectories(pendingCalibrationInput_.leftDirectory, pendingCalibrationInput_.rightDirectory);
+        acquisitionPanel_->setCalibrationFile(pendingCalibrationInput_.outputFile);
+        configService_.save(acquisitionPanel_->projectConfig());
+        acquisitionPanel_->setResultSummary(QString::fromUtf8("RMS: %1 | 标定帧: %2")
+            .arg(calibration_.rms).arg(calibration_.successfulPairs));
+        refreshProjectTree();
+        QMessageBox::information(this, QString::fromUtf8("标定完成"),
+            QString::fromUtf8("双目标定完成。RMS: %1\n标定结果已自动保存到：\n%2")
+                .arg(calibration_.rms).arg(QString::fromStdString(pendingCalibrationInput_.outputFile)));
     } catch (const std::exception& ex) {
         Logger::instance().error("Calibration", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("标定失败"), QString::fromStdString(ex.what()));
@@ -1461,41 +1252,34 @@ void MainWindow::onReconstructionFinished()
 {
     setBusy(false, QString());
     try {
-        reconstruction_ = reconstructionWatcher_.result();
-        if (!reconstruction_.success || reconstruction_.mergedPoints.empty()) {
-            autoExportReconstructionOnFinish_ = false;
-            const QString message = reconstruction_.message.empty()
+        auto completed = reconstructionWatcher_.result();
+        if (!completed.success || completed.mergedPoints.empty()) {
+            const QString message = completed.message.empty()
                 ? QString::fromUtf8("没有重建出有效点云，请检查标定文件、ROI、激光阈值和采集图像。")
-                : QString::fromStdString(reconstruction_.message);
+                : QString::fromStdString(completed.message);
             Logger::instance().warning("Reconstruction", message.toStdString());
             QMessageBox::warning(this, QString::fromUtf8("重建失败"), message);
             return;
         }
-        if (autoExportReconstructionOnFinish_ && !reconstruction_.mergedPoints.empty()) {
-            const QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-            reconstruction_.txtPath = outputPath("point_cloud_" + timestamp + ".txt").toStdString();
-            reconstruction_.pcdPath = outputPath("point_cloud_" + timestamp + ".pcd").toStdString();
-            pointCloudService_.saveTxt(reconstruction_.txtPath, reconstruction_.mergedPoints);
-            pointCloudService_.savePcd(reconstruction_.pcdPath, reconstruction_.mergedPoints);
-            autoExportReconstructionOnFinish_ = false;
-        }
+        reconstruction_ = std::move(completed);
+        updateResultAvailability();
         pointCloudView_->setPoints(reconstruction_.mergedPoints);
         refreshProjectTree();
-        QMessageBox::information(this, QString::fromUtf8("重建完成"), QString::fromUtf8("点云数量: %1").arg(static_cast<qulonglong>(reconstruction_.mergedPoints.size())));
+        QMessageBox::information(this, QString::fromUtf8("重建完成"),
+            QString::fromUtf8("点云数量: %1\n已自动保存:\n%2\n%3")
+                .arg(static_cast<qulonglong>(reconstruction_.mergedPoints.size()))
+                .arg(QString::fromStdString(reconstruction_.txtPath))
+                .arg(QString::fromStdString(reconstruction_.pcdPath)));
     } catch (const WorkerException& ex) {
-        autoExportReconstructionOnFinish_ = false;
         Logger::instance().error("Reconstruction", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromStdString(ex.what()));
     } catch (const cv::Exception& ex) {
-        autoExportReconstructionOnFinish_ = false;
         Logger::instance().error("Reconstruction", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromUtf8("OpenCV 重建异常：%1").arg(QString::fromStdString(ex.what())));
     } catch (const std::exception& ex) {
-        autoExportReconstructionOnFinish_ = false;
         Logger::instance().error("Reconstruction", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromStdString(ex.what()));
     } catch (...) {
-        autoExportReconstructionOnFinish_ = false;
         Logger::instance().error("Reconstruction", "Reconstruction failed with an unknown exception.");
         QMessageBox::critical(this, QString::fromUtf8("重建失败"), QString::fromUtf8("重建时发生未知异常。"));
     }
@@ -1530,32 +1314,8 @@ void MainWindow::onAcquisitionFinished()
     }
 }
 
-void MainWindow::onCalibrationCaptureStarted()
-{
-    setBusy(false, QString());
-    try {
-        const auto state = calibrationCaptureStartWatcher_.result();
-        calibrationCapture_ = state.acquisition;
-        acquisition_ = calibrationCapture_;
-        acquisitionPanel_->setCalibrationCaptureState(state.active, calibrationCapture_.capturedFrameCount);
-        acquisitionPanel_->setCalibrationDirectories(calibrationCapture_.leftDirectory, calibrationCapture_.rightDirectory);
-        acquisitionPanel_->setCalibrationFile(defaultCalibrationFilePath().toStdString());
-        setCaptureReviewResult(calibrationCapture_);
-        acquisitionPanel_->setStatusText(QString::fromStdString(calibrationCapture_.message));
-        acquisitionPanel_->setResultSummary(QString::fromUtf8("标定采集帧: %1").arg(calibrationCapture_.capturedFrameCount));
-        refreshProjectTree();
-    } catch (const std::exception& ex) {
-        calibrationCaptureSessionService_.finish();
-        acquisitionPanel_->setCalibrationCaptureState(false, 0);
-        acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
-        Logger::instance().error("CalibrationCapture", ex.what());
-        QMessageBox::critical(this, QString::fromUtf8("开始标定采集失败"), QString::fromStdString(ex.what()));
-    }
-}
-
 void MainWindow::onCalibrationFrameCaptured()
 {
-    setBusy(false, QString());
     try {
         calibrationCapture_ = calibrationFrameWatcher_.result();
         acquisition_ = calibrationCapture_;
@@ -1567,10 +1327,12 @@ void MainWindow::onCalibrationFrameCaptured()
         acquisitionPanel_->setCalibrationDirectories(calibrationCapture_.leftDirectory, calibrationCapture_.rightDirectory);
         refreshProjectTree();
     } catch (const std::exception& ex) {
+        acquisitionPanel_->setCalibrationCaptureState(calibrationCaptureSessionService_.isActive(), calibrationCapture_.capturedFrameCount);
         acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
         Logger::instance().error("CalibrationCapture", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("采集当前帧失败"), QString::fromStdString(ex.what()));
     }
+    setBusy(false, QString());
 }
 
 void MainWindow::onReconstructionCaptureFinished()
@@ -1581,7 +1343,6 @@ void MainWindow::onReconstructionCaptureFinished()
         acquisition_ = reconstructionCapture_;
         acquisitionPanel_->setStatusText(QString::fromStdString(reconstructionCapture_.message));
         acquisitionPanel_->setResultSummary(QString::fromUtf8("重建采集帧: %1").arg(reconstructionCapture_.capturedFrameCount));
-        acquisitionPanel_->setReconstructionCaptureReady(reconstructionCapture_.success);
         setCaptureReviewResult(reconstructionCapture_);
         setLiveStereoImages(reconstructionCapture_.lastLeftPreview, reconstructionCapture_.lastRightPreview);
         if (reconstructionCapture_.success) {
@@ -1592,10 +1353,9 @@ void MainWindow::onReconstructionCaptureFinished()
                 QString::fromUtf8("重建采集完成"),
                 QString::fromUtf8("重建采集完成，成功帧数: %1").arg(reconstructionCapture_.capturedFrameCount));
         } else {
-            QMessageBox::warning(this, QString::fromUtf8("重建采集无有效帧"), QString::fromStdString(reconstructionCapture_.message));
+            QMessageBox::warning(this, QString::fromUtf8("重建采集未完整完成"), QString::fromStdString(reconstructionCapture_.message));
         }
     } catch (const std::exception& ex) {
-        acquisitionPanel_->setReconstructionCaptureReady(false);
         acquisitionPanel_->setStatusText(QString::fromStdString(ex.what()));
         Logger::instance().error("ReconstructionCapture", ex.what());
         QMessageBox::critical(this, QString::fromUtf8("重建采集失败"), QString::fromStdString(ex.what()));
@@ -1614,6 +1374,7 @@ void MainWindow::onAutoCalibrationFinished()
         setLiveStereoImages(acquisition_.lastLeftPreview, acquisition_.lastRightPreview);
         if (autoCalibrationWorkflow_.success) {
             calibration_ = autoCalibrationWorkflow_.calibration;
+            updateResultAvailability();
             acquisitionPanel_->setCalibrationDirectories(acquisition_.leftDirectory, acquisition_.rightDirectory);
             refreshProjectTree();
             QMessageBox::information(
@@ -1646,13 +1407,17 @@ void MainWindow::onScanAndReconstructFinished()
         if (scanWorkflow_.success) {
             reconstruction_ = scanWorkflow_.reconstruction;
             calibration_ = scanWorkflow_.calibration;
+            updateResultAvailability();
             pointCloudView_->setPoints(reconstruction_.mergedPoints);
             acquisitionPanel_->setReconstructionDirectories(acquisition_.leftDirectory, acquisition_.rightDirectory);
             refreshProjectTree();
             QMessageBox::information(
                 this,
                 QString::fromUtf8("扫描重建完成"),
-                QString::fromUtf8("点云数量: %1").arg(static_cast<qulonglong>(reconstruction_.mergedPoints.size())));
+                QString::fromUtf8("点云数量: %1\n已自动保存:\n%2\n%3")
+                    .arg(static_cast<qulonglong>(reconstruction_.mergedPoints.size()))
+                    .arg(QString::fromStdString(reconstruction_.txtPath))
+                    .arg(QString::fromStdString(reconstruction_.pcdPath)));
         } else {
             QMessageBox::warning(this, QString::fromUtf8("扫描重建失败"), QString::fromStdString(scanWorkflow_.message));
         }
@@ -1663,20 +1428,18 @@ void MainWindow::onScanAndReconstructFinished()
     }
 }
 
-// 顶部菜单栏负责暴露保存、采集、标定、重建和导出等主流程入口。
+// 顶部菜单栏保留标定加载、设备刷新和退出入口。
 void MainWindow::buildMenus()
 {
     auto* fileMenu = menuBar()->addMenu(QString::fromUtf8("文件"));
-    fileMenu->addAction(QString::fromUtf8("保存项目"), this, &MainWindow::saveProjectSettings);
     fileMenu->addAction(QString::fromUtf8("加载标定"), this, &MainWindow::loadCalibration);
     fileMenu->addSeparator();
-    fileMenu->addAction(QString::fromUtf8("退出"), qApp, &QApplication::quit);
+    fileMenu->addAction(QString::fromUtf8("退出"), this, &QWidget::close);
 
     auto* scanMenu = menuBar()->addMenu(QString::fromUtf8("扫描"));
     scanMenu->addAction(QString::fromUtf8("刷新相机"), this, &MainWindow::refreshAcquisitionDevices);
     scanMenu->addSeparator();
     scanMenu->addAction(QString::fromUtf8("离线双目标定"), this, &MainWindow::runCalibration);
-    scanMenu->addAction(QString::fromUtf8("离线三维重建"), this, &MainWindow::runReconstruction);
 
     auto* viewMenu = menuBar()->addMenu(QString::fromUtf8("显示"));
     viewMenu->addAction(QString::fromUtf8("清空点云预览栏"), pointCloudView_, &PointCloudViewWidget::clear);
@@ -1685,19 +1448,14 @@ void MainWindow::buildMenus()
     menuBar()->addMenu(QString::fromUtf8("帮助"));
 }
 
-// 工具栏提供最常用的一组快捷操作，便于离线处理和在线采集快速切换。
+// 重建统一由右侧目录和按钮执行，点云自动保存。
 void MainWindow::buildToolBar()
 {
     auto* toolbar = addToolBar(QString::fromUtf8("工具"));
     toolbar->setMovable(false);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_DialogSaveButton), QString::fromUtf8("保存"), this, &MainWindow::saveProjectSettings);
     toolbar->addAction(style()->standardIcon(QStyle::SP_DirOpenIcon), QString::fromUtf8("加载标定"), this, &MainWindow::loadCalibration);
     toolbar->addAction(style()->standardIcon(QStyle::SP_BrowserReload), QString::fromUtf8("刷新相机"), this, &MainWindow::refreshAcquisitionDevices);
     toolbar->addAction(style()->standardIcon(QStyle::SP_MediaPlay), QString::fromUtf8("离线标定"), this, &MainWindow::runCalibration);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_ComputerIcon), QString::fromUtf8("离线重建"), this, &MainWindow::runReconstruction);
-    toolbar->addSeparator();
-    toolbar->addAction(style()->standardIcon(QStyle::SP_FileDialogDetailedView), QString::fromUtf8("导出TXT"), this, &MainWindow::exportTxt);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_DriveHDIcon), QString::fromUtf8("导出PCD"), this, &MainWindow::exportPcd);
 }
 
 // Dock 区域保留右侧在线工作流和底部日志面板，主显示区留给图像与点云。
@@ -1709,10 +1467,15 @@ void MainWindow::buildDocks()
     acquisitionDock->setWidget(acquisitionPanel_);
     addDockWidget(Qt::RightDockWidgetArea, acquisitionDock);
 
+    // 默认保留两行可见空间，面板会自动滚动到最新记录。
     logPanel_ = new LogPanel;
     auto* bottomDock = new QDockWidget(QString::fromUtf8("消息"), this);
     bottomDock->setWidget(logPanel_);
     addDockWidget(Qt::BottomDockWidgetArea, bottomDock);
+    QTimer::singleShot(0, this, [this, bottomDock]() {
+        const int titleHeight = bottomDock->height() - logPanel_->height();
+        resizeDocks({bottomDock}, {logPanel_->sizeHint().height() + titleHeight}, Qt::Vertical);
+    });
 }
 
 // 中央区域以标签页形式承载双目实时预览、采集筛选和点云视图。
@@ -1775,10 +1538,19 @@ void MainWindow::refreshProjectTree()
 {
 }
 
+void MainWindow::updateResultAvailability()
+{
+    if (acquisitionPanel_) {
+        acquisitionPanel_->setResultAvailability(calibration_.isValid(),
+            reconstruction_.success && !reconstruction_.mergedPoints.empty());
+    }
+}
+
 // 忙碌状态统一驱动底部进度条和在线采集面板按钮的可用性。
 void MainWindow::setBusy(bool busy, const QString& text, bool keepLivePreview)
 {
     busy_ = busy;
+    updateResultAvailability();
     if (busy_ && !keepLivePreview) {
         stopLivePreview();
     }
@@ -1894,7 +1666,6 @@ void MainWindow::onCaptureReviewResultChanged()
 
     if (!reconstructionCapture_.sessionDirectory.empty() && result.sessionDirectory == reconstructionCapture_.sessionDirectory) {
         reconstructionCapture_ = result;
-        acquisitionPanel_->setReconstructionCaptureReady(reconstructionCapture_.capturedFrameCount > 0);
         acquisitionPanel_->setResultSummary(QString::fromUtf8("重建采集帧: %1").arg(reconstructionCapture_.capturedFrameCount));
     }
 
@@ -1972,7 +1743,7 @@ void MainWindow::runLivePreviewLoop(StereoCameraConfig config)
     try {
         AcquisitionService service;
         auto provider = service.createProvider(config);
-        Logger::instance().info("Acquisition", "Live stereo preview started.");
+        Logger::instance().debug("Acquisition", "Live stereo preview started.");
 
         while (!shuttingDown_.load() && !livePreviewStopRequested_.load() && provider->hasNext()) {
             FramePair frame = provider->next();
@@ -1983,7 +1754,7 @@ void MainWindow::runLivePreviewLoop(StereoCameraConfig config)
             std::this_thread::sleep_for(std::chrono::milliseconds(30));
         }
 
-        Logger::instance().info("Acquisition", "Live stereo preview stopped.");
+        Logger::instance().debug("Acquisition", "Live stereo preview stopped.");
     } catch (const std::exception& ex) {
         if (!shuttingDown_.load() && !livePreviewStopRequested_.load()) {
             Logger::instance().warning("Acquisition", std::string("Live stereo preview stopped: ") + ex.what());
@@ -2004,7 +1775,7 @@ void MainWindow::runLivePreviewLoop(StereoCameraConfig config)
 
 void MainWindow::runCalibrationCapturePreviewLoop()
 {
-    Logger::instance().info("Acquisition", "Calibration capture live preview started.");
+    Logger::instance().debug("Acquisition", "Calibration capture live preview started.");
     while (!shuttingDown_.load() && !livePreviewStopRequested_.load() && calibrationCaptureSessionService_.isActive()) {
         FramePair frame = calibrationCaptureSessionService_.grabPreviewFrame();
         if (!frame.left.empty() || !frame.right.empty()) {
@@ -2012,7 +1783,7 @@ void MainWindow::runCalibrationCapturePreviewLoop()
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
-    Logger::instance().info("Acquisition", "Calibration capture live preview stopped.");
+    Logger::instance().debug("Acquisition", "Calibration capture live preview stopped.");
 }
 void MainWindow::refreshLaserSwitchPreview(const IntegratedScanConfig& config)
 {
@@ -2110,20 +1881,6 @@ QString MainWindow::defaultCalibrationFilePath() const
     QDir().mkpath(resultDirectory);
     const QString fileName = "stereo_calibration_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz") + ".yml";
     return QDir(resultDirectory).filePath(fileName);
-}
-
-// 导出路径默认基于当前项目输出目录拼接，减少每次导出时重复选路径。
-QString MainWindow::outputPath(const QString& filename) const
-{
-    const auto config = acquisitionPanel_->projectConfig();
-    QString root = QString::fromStdString(config.outputDirectory);
-    if (root.trimmed().isEmpty()) {
-        root = ".";
-    }
-
-    const QString resultDirectory = QDir(root).filePath("reconstruction");
-    QDir().mkpath(resultDirectory);
-    return QDir(resultDirectory).filePath(filename);
 }
 
 } // namespace htmsr::app

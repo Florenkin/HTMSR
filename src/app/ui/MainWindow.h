@@ -8,7 +8,6 @@
 #include "app/services/QtLogSink.h"
 #include "app/services/ReconstructionCaptureSessionService.h"
 #include "core/CalibrationService.h"
-#include "core/PointCloudService.h"
 #include "core/ReconstructionService.h"
 
 #include <QFutureWatcher>
@@ -72,14 +71,8 @@ private slots:
     void runCalibration();
     // 从磁盘加载已有标定文件。
     void loadCalibration();
-    // 执行离线三维重建任务，后台线程调用 ReconstructionService。
-    void runReconstruction();
-    // 导出当前点云为 txt 文件。
-    void exportTxt();
-    // 导出当前点云为 pcd 文件。
-    void exportPcd();
-    // 保存当前项目参数到 QSettings。
-    void saveProjectSettings();
+    void exportCalibration();
+    void exportReconstruction();
     // 刷新在线采集设备列表。
     void refreshAcquisitionDevices();
     // 执行在线采集保存任务。
@@ -88,11 +81,9 @@ private slots:
     void runAutoCalibration();
     // 执行一键扫描重建任务。
     void runScanAndReconstruct();
-    void startCalibrationCapture();
     void captureCalibrationFrame();
     void calibrateCapturedFrames();
-    void saveCalibrationResult();
-    void loadCalibrationResult();
+    void loadCalibrationFile(const QString& file);
     void finishCalibrationCapture();
     void startReconstructionCapture();
     void onReconstructionGalvoPreflightFinished();
@@ -112,7 +103,6 @@ private slots:
     void onAutoCalibrationFinished();
     // 一键扫描重建后台任务结束后的 UI 回调。
     void onScanAndReconstructFinished();
-    void onCalibrationCaptureStarted();
     void onCalibrationFrameCaptured();
     void onReconstructionCaptureFinished();
     void onCaptureReviewResultChanged();
@@ -128,6 +118,7 @@ private:
     void buildCentralView();
     // 保留流程刷新入口；当前界面不再显示独立资源面板。
     void refreshProjectTree();
+    void updateResultAvailability();
     // 更新任务忙碌状态和底部进度条。
     void setBusy(bool busy, const QString& text, bool keepLivePreview = false);
     // 将后台采集到的左右帧安全投递到主线程，用于实时刷新双目实时窗口。
@@ -157,8 +148,6 @@ private:
     QString calibrationResultsDirectory() const;
     // 生成一次新的默认标定结果文件路径。
     QString defaultCalibrationFilePath() const;
-    // 根据输出目录拼接默认导出文件路径。
-    QString outputPath(const QString& filename) const;
 
     AppConfigService configService_;
     AcquisitionService acquisitionService_;
@@ -168,7 +157,6 @@ private:
     ReconstructionCaptureSessionService reconstructionCaptureSessionService_;
     CalibrationService calibrationService_;
     ReconstructionService reconstructionService_;
-    PointCloudService pointCloudService_;
     QtLogSink* logSink_ = nullptr;
 
     AcquisitionPanel* acquisitionPanel_ = nullptr;
@@ -183,13 +171,13 @@ private:
     QProgressBar* progressBar_ = nullptr;
 
     CalibrationResult calibration_;
+    CalibrationInput pendingCalibrationInput_;
     ReconstructionResult reconstruction_;
     AcquisitionSessionResult acquisition_;
     AcquisitionSessionResult calibrationCapture_;
     AcquisitionSessionResult reconstructionCapture_;
     IntegratedWorkflowResult autoCalibrationWorkflow_;
     IntegratedWorkflowResult scanWorkflow_;
-    bool autoExportReconstructionOnFinish_ = false;
     bool galvoLaserEnabled_ = false;
     bool busy_ = false;
     std::atomic_bool shuttingDown_ = false;
@@ -199,7 +187,6 @@ private:
     QFutureWatcher<CalibrationResult> calibrationWatcher_;
     QFutureWatcher<ReconstructionResult> reconstructionWatcher_;
     QFutureWatcher<AcquisitionSessionResult> acquisitionWatcher_;
-    QFutureWatcher<CalibrationCaptureSessionState> calibrationCaptureStartWatcher_;
     QFutureWatcher<AcquisitionSessionResult> calibrationFrameWatcher_;
     QFutureWatcher<AcquisitionSessionResult> reconstructionCaptureWatcher_;
     QFutureWatcher<IntegratedWorkflowResult> autoCalibrationWatcher_;

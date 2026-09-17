@@ -19,6 +19,8 @@ public:
             无
     */
     explicit LogPanel(QWidget* parent = nullptr);
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 public slots:
     /*
@@ -34,6 +36,7 @@ public slots:
 
 private:
     QTableWidget* table_ = nullptr;
+    bool scrollPending_ = false;
 };
 
 } // namespace htmsr::app

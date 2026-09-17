@@ -15,6 +15,7 @@ class QLineEdit;
 class QObject;
 class QPushButton;
 class QSpinBox;
+class QTabWidget;
 
 namespace htmsr::app {
 
@@ -32,6 +33,7 @@ public:
             无（函数会刷新 UI 控件内容）
     */
     void setDevices(const std::vector<CameraDeviceInfo>& devices);
+    void setSerialPorts(const std::vector<std::string>& ports);
 
     /*
         函数功能：从采集面板读取一次双相机采集任务配置
@@ -54,6 +56,8 @@ public:
     CalibrationInput calibrationInput() const;
     ReconstructionInput reconstructionInput(const CalibrationResult& calibration) const;
     void setProjectConfig(const AppProjectConfig& config);
+    // 保存前提交仍在编辑中的数值，避免关闭窗口时丢失最后一次输入。
+    void commitPendingEdits();
     void setCalibrationDirectories(const std::string& leftDirectory, const std::string& rightDirectory);
     void setCalibrationFile(const std::string& calibrationFile);
     void setReconstructionDirectories(const std::string& leftDirectory, const std::string& rightDirectory);
@@ -73,21 +77,20 @@ public:
     void setResultSummary(const QString& text);
     QWidget* rawGalvoCommandWidget() const;
     void setCalibrationCaptureState(bool active, int capturedFrameCount);
-    void setReconstructionCaptureReady(bool ready);
+    void setResultAvailability(bool calibrationAvailable, bool reconstructionAvailable);
     // 重建前回读设备角度后，刷新显示并以实际角度计算采集帧数。
     void setFrameCountFromDevice(double stepAngleDeg, int totalRotationAngleDeg);
 
 signals:
     void refreshDevicesRequested();
-    void offlineCalibrationRequested();
-    void startCalibrationCaptureRequested();
     void captureCalibrationFrameRequested();
     void calibrateCapturedFramesRequested();
-    void saveCalibrationResultRequested();
-    void loadCalibrationResultRequested();
+    void exportCalibrationRequested();
+    void calibrationFileSelected(const QString& file);
     void finishCalibrationCaptureRequested();
     void startReconstructionCaptureRequested();
     void reconstructCapturedFramesRequested();
+    void exportReconstructionRequested();
     void sendRawGalvoCommandRequested(const QString& commandText);
     void cameraConfigChanged();
     void galvoConfigChanged();
@@ -110,13 +113,13 @@ private:
     QComboBox* leftDeviceCombo_ = nullptr;
     QComboBox* rightDeviceCombo_ = nullptr;
     QLineEdit* galvoDeviceEdit_ = nullptr;
+    std::string galvoPortName_;
     QComboBox* reconstructionCaptureModeCombo_ = nullptr;
     QSpinBox* triggerLineSpin_ = nullptr;
     QLineEdit* frameCountEdit_ = nullptr;
     int derivedFrameCount_ = 2000;
-    QLineEdit* outputDirectoryEdit_ = nullptr;
+    std::string outputDirectory_;
     QDoubleSpinBox* exposureTimeSpin_ = nullptr;
-    QDoubleSpinBox* gainSpin_ = nullptr;
     QLineEdit* leftCalibrationEdit_ = nullptr;
     QLineEdit* rightCalibrationEdit_ = nullptr;
     QLineEdit* leftReconstructionEdit_ = nullptr;
@@ -126,12 +129,9 @@ private:
     QSpinBox* boardHeightSpin_ = nullptr;
     QDoubleSpinBox* squareWidthSpin_ = nullptr;
     QDoubleSpinBox* squareHeightSpin_ = nullptr;
-    QLineEdit* galvoPortEdit_ = nullptr;
     QDoubleSpinBox* galvoTotalRotationAngleSpin_ = nullptr;
     QDoubleSpinBox* galvoStepAngleSpin_ = nullptr;
-    QSpinBox* galvoForwardSpeedSpin_ = nullptr;
-    QSpinBox* galvoReverseSpeedSpin_ = nullptr;
-    QSpinBox* galvoLaserDutySpin_ = nullptr;
+    QSpinBox* galvoSpeedSpin_ = nullptr;
     QLineEdit* rawGalvoCommandEdit_ = nullptr;
     QPushButton* rawGalvoCommandButton_ = nullptr;
     QWidget* rawGalvoCommandWidget_ = nullptr;
@@ -159,20 +159,19 @@ private:
     QSpinBox* removeEndpointCountSpin_ = nullptr;
 
     QPushButton* refreshButton_ = nullptr;
-    QPushButton* offlineCalibrationButton_ = nullptr;
-    QPushButton* startCalibrationCaptureButton_ = nullptr;
     QPushButton* captureCalibrationFrameButton_ = nullptr;
     QPushButton* calibrateCapturedFramesButton_ = nullptr;
-    QPushButton* saveCalibrationResultButton_ = nullptr;
-    QPushButton* loadCalibrationResultButton_ = nullptr;
-    QPushButton* finishCalibrationCaptureButton_ = nullptr;
+    QPushButton* exportCalibrationButton_ = nullptr;
     QPushButton* startReconstructionCaptureButton_ = nullptr;
     QPushButton* reconstructCapturedFramesButton_ = nullptr;
+    QPushButton* exportReconstructionButton_ = nullptr;
+    QTabWidget* workflowTabs_ = nullptr;
 
     bool busy_ = false;
     bool calibrationCaptureActive_ = false;
     int calibrationCapturedFrameCount_ = 0;
-    bool reconstructionCaptureReady_ = false;
+    bool calibrationResultAvailable_ = false;
+    bool reconstructionResultAvailable_ = false;
 };
 
 } // namespace htmsr::app

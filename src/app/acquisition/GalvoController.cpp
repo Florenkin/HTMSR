@@ -344,6 +344,36 @@ std::string normalizePortName(const std::string& portName)
     }
     return "\\\\.\\" + portName;
 }
+
+std::string serialConnectionError(const char* action, const std::string& portName, DWORD errorCode)
+{
+    std::string message = std::string(action) + "：" + portName + "。";
+    if (errorCode == ERROR_FILE_NOT_FOUND || errorCode == ERROR_PATH_NOT_FOUND) {
+        message += "系统未识别到此串口。请检查振镜 USB 数据线、控制器供电和驱动，再刷新设备自动识别串口。";
+    } else if (errorCode == ERROR_ACCESS_DENIED || errorCode == ERROR_SHARING_VIOLATION) {
+        message += "串口可能被占用或访问被拒绝。请关闭串口调试助手、厂家控制软件和其他 HTMSR 实例。";
+    }
+    message += " Windows 错误 " + std::to_string(errorCode);
+    wchar_t buffer[512]{};
+    const DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, errorCode, 0, buffer, static_cast<DWORD>(std::size(buffer)), nullptr);
+    if (length > 0) {
+        std::wstring systemMessage(buffer, length);
+        while (!systemMessage.empty() && (systemMessage.back() == L'\r' ||
+            systemMessage.back() == L'\n' || systemMessage.back() == L' ')) {
+            systemMessage.pop_back();
+        }
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, systemMessage.data(),
+            static_cast<int>(systemMessage.size()), nullptr, 0, nullptr, nullptr);
+        if (bytes > 0) {
+            std::string utf8(bytes, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, systemMessage.data(),
+                static_cast<int>(systemMessage.size()), utf8.data(), bytes, nullptr, nullptr);
+            message += "：" + utf8;
+        }
+    }
+    return message;
+}
 #endif
 
 } // namespace
@@ -351,6 +381,7 @@ std::string normalizePortName(const std::string& portName)
 struct SerialGalvoController::Impl {
     GalvoScanConfig config;
     bool connected = false;
+    std::string lastError;
     GalvoSyncMode syncMode = GalvoSyncMode::Sync;
     int captureIntervalMs = 30;
     int continuousCaptureWaitMs = 50;
@@ -442,13 +473,26 @@ SerialGalvoController::~SerialGalvoController()
 
 bool SerialGalvoController::connect()
 {
+    impl_->lastError.clear();
+    if (impl_->config.portName.empty()) {
+        impl_->lastError = "未识别到唯一的振镜串口。请连接振镜 USB 串口并刷新设备；多个串口时请暂时断开其他串口设备。";
+        Logger::instance().error("Galvo", impl_->lastError);
+        return false;
+    }
 #ifndef _WIN32
-    Logger::instance().error("Galvo", "Serial galvo controller is only implemented for Windows.");
+    impl_->lastError = "Serial galvo controller is only implemented for Windows.";
+    Logger::instance().error("Galvo", impl_->lastError);
     return false;
 #else
     if (impl_->connected) {
         return true;
     }
+    const auto failConnection = [&](const char* action, DWORD errorCode) {
+        impl_->lastError = serialConnectionError(action, impl_->config.portName, errorCode);
+        Logger::instance().error("Galvo", impl_->lastError);
+        disconnect();
+        return false;
+    };
 
     const std::string portName = normalizePortName(impl_->config.portName);
     impl_->handle = CreateFileW(
@@ -461,19 +505,13 @@ bool SerialGalvoController::connect()
         nullptr);
     if (impl_->handle == INVALID_HANDLE_VALUE) {
         const DWORD errorCode = GetLastError();
-        Logger::instance().error(
-            "Galvo",
-            "Failed to open galvo serial port: " + impl_->config.portName +
-                ", Windows error=" + std::to_string(errorCode));
-        return false;
+        return failConnection("无法打开振镜串口", errorCode);
     }
 
     DCB dcb{};
     dcb.DCBlength = sizeof(DCB);
     if (!GetCommState(impl_->handle, &dcb)) {
-        Logger::instance().error("Galvo", "GetCommState failed for port: " + impl_->config.portName);
-        disconnect();
-        return false;
+        return failConnection("读取振镜串口配置失败", GetLastError());
     }
 
     dcb.BaudRate = static_cast<DWORD>(impl_->config.baudRate);
@@ -488,9 +526,7 @@ bool SerialGalvoController::connect()
     dcb.fOutX = FALSE;
     dcb.fInX = FALSE;
     if (!SetCommState(impl_->handle, &dcb)) {
-        Logger::instance().error("Galvo", "SetCommState failed for port: " + impl_->config.portName);
-        disconnect();
-        return false;
+        return failConnection("设置振镜串口配置失败", GetLastError());
     }
 
     COMMTIMEOUTS timeouts{};
@@ -500,14 +536,12 @@ bool SerialGalvoController::connect()
     timeouts.WriteTotalTimeoutConstant = static_cast<DWORD>(impl_->config.commandTimeoutMs);
     timeouts.WriteTotalTimeoutMultiplier = 0;
     if (!SetCommTimeouts(impl_->handle, &timeouts)) {
-        Logger::instance().error("Galvo", "SetCommTimeouts failed for port: " + impl_->config.portName);
-        disconnect();
-        return false;
+        return failConnection("设置振镜串口超时失败", GetLastError());
     }
 
     PurgeComm(impl_->handle, PURGE_RXCLEAR | PURGE_TXCLEAR);
     impl_->connected = true;
-    Logger::instance().info("Galvo", "Connected galvo serial port: " + impl_->config.portName);
+    Logger::instance().debug("Galvo", "Connected galvo serial port: " + impl_->config.portName);
     return true;
 #endif
 }
@@ -528,6 +562,11 @@ void SerialGalvoController::disconnect()
 bool SerialGalvoController::isConnected() const
 {
     return impl_ && impl_->connected;
+}
+
+std::string SerialGalvoController::lastError() const
+{
+    return impl_ ? impl_->lastError : std::string{};
 }
 
 GalvoCommandResult sendAndReceive(
@@ -569,7 +608,7 @@ GalvoCommandResult sendAndReceive(
     }
 
     FlushFileBuffers(handle);
-    Logger::instance().info("Galvo", "Sent command: " + formatBytes(request));
+    Logger::instance().debug("Galvo", "Sent command: " + formatBytes(request));
 
     if (!expectResponse) {
         Sleep(kNoResponseCommandSettleMs);
@@ -656,6 +695,10 @@ GalvoCommandResult SerialGalvoController::getSyncMode(GalvoSyncMode& mode)
         mode = rawValue == 0 ? GalvoSyncMode::Async : GalvoSyncMode::Sync;
         impl_->syncMode = mode;
     } else {
+        if (result.success) {
+            result.success = false;
+            result.message = "Invalid sync-mode response payload; cached state is not a verified device readback.";
+        }
         mode = impl_->syncMode;
     }
     return result;
@@ -760,6 +803,9 @@ GalvoCommandResult SerialGalvoController::getStepAngle(double& angleDeg)
     unsigned int secondValue = 0;
     if (result.success && tryParsePairResponse(result.response, firstValue, secondValue)) {
         impl_->stepAngleDeg = decodeStepAngle(firstValue, secondValue);
+    } else if (result.success) {
+        result.success = false;
+        result.message = "Invalid step-angle response payload; cached angle is not a verified device readback.";
     }
     angleDeg = impl_->stepAngleDeg;
     return result;
@@ -794,6 +840,9 @@ GalvoCommandResult SerialGalvoController::getAutoRotationAngle(int& angleDeg)
     unsigned int rawValue = 0;
     if (result.success && tryParseSingleUint32Response(result.response, rawValue)) {
         impl_->autoRotationAngleDeg = static_cast<int>(rawValue);
+    } else if (result.success) {
+        result.success = false;
+        result.message = "Invalid total-angle response payload; cached angle is not a verified device readback.";
     }
     angleDeg = impl_->autoRotationAngleDeg;
     return result;

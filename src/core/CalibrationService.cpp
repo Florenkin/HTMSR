@@ -425,7 +425,7 @@ bool CalibrationService::loadCalibration(const std::string& filename, Calibratio
     }
 }
 
-void CalibrationService::saveCalibration(const std::string& filename, const CalibrationResult& result) const
+void CalibrationService::saveCalibration(const std::string& filename, const CalibrationResult& result, bool logSave) const
 {
     // 写文件前先创建父目录，避免用户选择新输出目录时保存失败。
     ensureParentDirectory(filename);
@@ -446,7 +446,10 @@ void CalibrationService::saveCalibration(const std::string& filename, const Cali
     fs << "E" << result.E;
     fs << "F" << result.F;
 
-    Logger::instance().info("Calibration", "Calibration file saved: " + filename);
+    fs.release();
+    if (logSave) {
+        Logger::instance().info("Calibration", "Calibration file saved: " + filename);
+    }
 }
 
 CalibrationService::CameraCalibration CalibrationService::calibrateSingleCamera(

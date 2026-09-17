@@ -3,6 +3,7 @@
 #include <Eigen/Core>
 #include <opencv2/core.hpp>
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@ struct LogMessage {
     LogLevel level = LogLevel::Info;
     std::string module;
     std::string text;
+    std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now();
 };
 
 // 激光中心线提取算法类型。
@@ -144,6 +146,16 @@ struct ReconstructionResult {
     std::string message;
 };
 
+// 可调采集参数；默认值仅在没有保存过设置时使用。
+struct AcquisitionParameterConfig {
+    double exposureTime = 3000.0;
+    bool useHardwareTrigger = true;
+    int triggerSourceLine = 5;
+    double stepAngleDeg = 0.02;
+    double totalRotationAngleDeg = 40.0;
+    int speedMs = 30;
+};
+
 // 软件工程配置，用于 UI 参数持久化和默认参数恢复。
 struct AppProjectConfig {
     std::string leftCalibrationDirectory;
@@ -155,6 +167,7 @@ struct AppProjectConfig {
     CalibrationInput calibrationInput;
     LaserExtractionConfig laserConfig;
     double matchDistanceThreshold = 0.5;
+    AcquisitionParameterConfig acquisitionParameters;
 };
 
 } // namespace htmsr

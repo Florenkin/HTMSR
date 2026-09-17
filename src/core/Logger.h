@@ -3,15 +3,18 @@
 #include "core/Types.h"
 
 #include <functional>
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace htmsr {
 
 class Logger {
 public:
     using Sink = std::function<void(const LogMessage&)>;
+    using SinkId = std::size_t;
 
     /*
         函数功能：获取全局日志对象
@@ -29,7 +32,9 @@ public:
         输出：
             无
     */
-    void addSink(Sink sink);
+    SinkId addSink(Sink sink);
+    // 仅移除指定接收器，不影响文件或其他窗口的日志。
+    void removeSink(SinkId id);
 
     /*
         函数功能：清空当前注册的所有日志接收器
@@ -60,7 +65,8 @@ private:
     Logger() = default;
 
     std::mutex mutex_;
-    std::vector<Sink> sinks_;
+    std::vector<std::pair<SinkId, Sink>> sinks_;
+    SinkId nextSinkId_ = 1;
 };
 
 /*

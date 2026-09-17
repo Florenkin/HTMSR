@@ -10,10 +10,12 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QUuid>
 
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <iomanip>
 #include <limits>
 #include <mutex>
@@ -40,7 +42,8 @@ AcquisitionSessionResult createSession(const std::string& outputDirectory)
     const QString captureRoot = QDir(root).filePath("calibration/capture");
     ensureDirectory(captureRoot);
 
-    const QString sessionName = "calibration_capture_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    const QString sessionName = "calibration_capture_" + QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz") +
+        '_' + QUuid::createUuid().toString(QUuid::Id128).left(8);
     const QString sessionDirectory = QDir(captureRoot).filePath(sessionName);
     ensureDirectory(sessionDirectory);
     ensureDirectory(QDir(sessionDirectory).filePath("left"));
@@ -75,7 +78,7 @@ CameraDeviceInfo findDeviceById(const std::vector<CameraDeviceInfo>& devices, co
 struct CalibrationCaptureSessionService::Impl {
     StereoCameraConfig config;
     AcquisitionSessionResult result;
-    bool active = false;
+    std::atomic_bool active{false};
     int nextFrameIndex = 0;
     std::mutex mutex;
     AcquisitionProviderPtr mockProvider;
@@ -100,7 +103,7 @@ CalibrationCaptureSessionState CalibrationCaptureSessionService::start(const Ste
 {
     finish();
 
-    std::lock_guard<std::mutex> lock(impl_->mutex);
+    std::unique_lock<std::mutex> lock(impl_->mutex);
     impl_->config = config;
     impl_->config.frameCount = std::max(1, config.frameCount);
     impl_->config.leftParameters.useHardwareTrigger = false;
@@ -119,19 +122,23 @@ CalibrationCaptureSessionState CalibrationCaptureSessionService::start(const Ste
         impl_->rightDevice = std::make_unique<HikCameraDevice>(findDeviceById(devices, impl_->config.rightDeviceId));
 
         if (!impl_->leftDevice->connect() || !impl_->rightDevice->connect()) {
+            lock.unlock();
             finish();
             throw std::runtime_error("Failed to connect Hik stereo cameras.");
         }
         if (!impl_->leftDevice->configure(impl_->config.leftParameters) || !impl_->rightDevice->configure(impl_->config.rightParameters)) {
+            lock.unlock();
             finish();
             throw std::runtime_error("Failed to configure Hik stereo cameras.");
         }
         if (!impl_->leftDevice->startGrabbing() || !impl_->rightDevice->startGrabbing()) {
+            lock.unlock();
             finish();
             throw std::runtime_error("Failed to start Hik stereo grabbing.");
         }
         Logger::instance().info("CalibrationCapture", "Started calibration capture session: " + impl_->result.sessionDirectory);
 #else
+        lock.unlock();
         finish();
         throw std::runtime_error("Hik camera support is disabled. Enable HTMSR_ENABLE_HIK_CAMERA or use mock provider.");
 #endif
@@ -146,6 +153,19 @@ CalibrationCaptureSessionState CalibrationCaptureSessionService::start(const Ste
     state.active = impl_->active;
     state.camerasReady = impl_->active;
     return state;
+}
+
+AcquisitionSessionResult CalibrationCaptureSessionService::captureCurrentFrame(const StereoCameraConfig& config)
+{
+    try {
+        if (!isActive()) {
+            start(config);
+        }
+        return captureCurrentFrame();
+    } catch (...) {
+        finish();
+        throw;
+    }
 }
 
 AcquisitionSessionResult CalibrationCaptureSessionService::captureCurrentFrame()

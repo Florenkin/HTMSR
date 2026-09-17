@@ -14,6 +14,7 @@ public:
     virtual bool connect() = 0;
     virtual void disconnect() = 0;
     virtual bool isConnected() const = 0;
+    virtual std::string lastError() const { return {}; }
 
     virtual GalvoCommandResult setSyncMode(GalvoSyncMode mode) = 0;
     virtual GalvoCommandResult getSyncMode(GalvoSyncMode& mode) = 0;
@@ -73,6 +74,7 @@ public:
     bool connect() override;
     void disconnect() override;
     bool isConnected() const override;
+    std::string lastError() const override;
 
     GalvoCommandResult setSyncMode(GalvoSyncMode mode) override;
     GalvoCommandResult getSyncMode(GalvoSyncMode& mode) override;

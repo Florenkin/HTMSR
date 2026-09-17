@@ -5,6 +5,7 @@
 #include <opencv2/core.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,7 +54,7 @@ struct CameraParameterConfig {
     double exposureTime = 3000.0;
     double gain = 15.0;
     bool useHardwareTrigger = false;
-    int triggerSourceLine = 0;
+    int triggerSourceLine = 5;
     int grabTimeoutMs = 1000;
 };
 
@@ -93,6 +94,13 @@ struct StereoCameraConfig {
     CameraParameterConfig rightParameters;
 };
 
+// 仅用于本次启动：由参数预检的真实回读生成，不能用构造时的默认/缓存值冒充。
+struct VerifiedGalvoMotionParameters {
+    std::string portName;
+    double stepAngleDeg = 0.0;
+    int totalRotationAngleDeg = 0;
+};
+
 // 一键自动流程配置，统一承载相机、振镜、标定与重建所需的任务输入。
 struct IntegratedScanConfig {
     StereoCameraConfig stereoCamera;
@@ -104,6 +112,14 @@ struct IntegratedScanConfig {
     ImageRange reconstructionRange;
     double matchDistanceThreshold = 0.5;
     bool forceRecalibration = false;
+    std::optional<VerifiedGalvoMotionParameters> verifiedGalvoMotion;
+
+    IntegratedScanConfig()
+    {
+        // 实时预览和标定仍可自由取流，重建扫描默认由同一外部脉冲触发双相机。
+        stereoCamera.leftParameters.useHardwareTrigger = true;
+        stereoCamera.rightParameters.useHardwareTrigger = true;
+    }
 };
 
 // 一次在线采集会话的保存结果，left/right 目录可直接作为离线重建输入。
