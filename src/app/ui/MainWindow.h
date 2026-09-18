@@ -108,10 +108,6 @@ private slots:
     void onCaptureReviewResultChanged();
 
 private:
-    // 构建顶部菜单栏。
-    void buildMenus();
-    // 构建顶部工具栏。
-    void buildToolBar();
     // 构建右侧在线工作流面板和底部日志面板。
     void buildDocks();
     // 构建中央点云/图像显示标签页。

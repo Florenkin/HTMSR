@@ -18,7 +18,6 @@
 
 #include <opencv2/core.hpp>
 
-#include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCoreApplication>
@@ -34,15 +33,12 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenuBar>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QProgressBar>
 #include <QStatusBar>
-#include <QStyle>
 #include <QStringList>
 #include <QTabWidget>
-#include <QToolBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtConcurrent>
@@ -259,7 +255,6 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1440, 920);
     setStyleSheet(
         "QMainWindow { background: #d9d9d9; }"
-        "QMenuBar, QToolBar { background: #efefef; border-bottom: 1px solid #b8b8b8; }"
         "QDockWidget::title { background: #d6d6d6; padding: 4px; border: 1px solid #b8b8b8; }"
         "QTabWidget::pane { border: 1px solid #b8b8b8; background: #f4f4f4; }"
         "QTabBar::tab { background: #e8e8e8; padding: 4px 12px; border: 1px solid #b8b8b8; }"
@@ -272,11 +267,9 @@ MainWindow::MainWindow(QWidget* parent)
         logPanel_->appendMessage(message);
     }, Qt::QueuedConnection);
 
-    // 按参考界面布局依次构建中央视图、Dock 区域、菜单和工具栏。
+    // 按参考界面布局依次构建中央视图和 Dock 区域。
     buildCentralView();
     buildDocks();
-    buildMenus();
-    buildToolBar();
 
     progressBar_ = new QProgressBar;
     progressBar_->setMaximumWidth(180);
@@ -1428,36 +1421,6 @@ void MainWindow::onScanAndReconstructFinished()
     }
 }
 
-// 顶部菜单栏保留标定加载、设备刷新和退出入口。
-void MainWindow::buildMenus()
-{
-    auto* fileMenu = menuBar()->addMenu(QString::fromUtf8("文件"));
-    fileMenu->addAction(QString::fromUtf8("加载标定"), this, &MainWindow::loadCalibration);
-    fileMenu->addSeparator();
-    fileMenu->addAction(QString::fromUtf8("退出"), this, &QWidget::close);
-
-    auto* scanMenu = menuBar()->addMenu(QString::fromUtf8("扫描"));
-    scanMenu->addAction(QString::fromUtf8("刷新相机"), this, &MainWindow::refreshAcquisitionDevices);
-    scanMenu->addSeparator();
-    scanMenu->addAction(QString::fromUtf8("离线双目标定"), this, &MainWindow::runCalibration);
-
-    auto* viewMenu = menuBar()->addMenu(QString::fromUtf8("显示"));
-    viewMenu->addAction(QString::fromUtf8("清空点云预览栏"), pointCloudView_, &PointCloudViewWidget::clear);
-
-    menuBar()->addMenu(QString::fromUtf8("设置"));
-    menuBar()->addMenu(QString::fromUtf8("帮助"));
-}
-
-// 重建统一由右侧目录和按钮执行，点云自动保存。
-void MainWindow::buildToolBar()
-{
-    auto* toolbar = addToolBar(QString::fromUtf8("工具"));
-    toolbar->setMovable(false);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_DirOpenIcon), QString::fromUtf8("加载标定"), this, &MainWindow::loadCalibration);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_BrowserReload), QString::fromUtf8("刷新相机"), this, &MainWindow::refreshAcquisitionDevices);
-    toolbar->addAction(style()->standardIcon(QStyle::SP_MediaPlay), QString::fromUtf8("离线标定"), this, &MainWindow::runCalibration);
-}
-
 // Dock 区域保留右侧在线工作流和底部日志面板，主显示区留给图像与点云。
 void MainWindow::buildDocks()
 {
@@ -1530,7 +1493,7 @@ void MainWindow::buildCentralView()
     tabs->addTab(liveStereoPage, QString::fromUtf8("双目"));
     tabs->addTab(pointCloudView_, QString::fromUtf8("点云"));
     tabs->addTab(captureReviewWidget_, QString::fromUtf8("采集"));
-    tabs->addTab(serialCommandPackWidget_, QString::fromUtf8("串口"));
+    tabs->addTab(serialCommandPackWidget_, QString::fromUtf8("命令"));
     setCentralWidget(tabs);
 }
 

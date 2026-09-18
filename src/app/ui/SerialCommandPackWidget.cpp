@@ -212,19 +212,20 @@ SerialCommandPackWidget::SerialCommandPackWidget(QWidget* parent)
     listScroll_->setMinimumWidth(390);
     listPageLayout->addWidget(listScroll_, 1);
 
-    auto* rawCommandGroup = new QGroupBox(QString::fromUtf8("单条串口指令"));
+    auto* rawCommandGroup = new QGroupBox;
     auto* rawCommandGroupLayout = new QVBoxLayout(rawCommandGroup);
     rawCommandGroupLayout->setContentsMargins(8, 8, 8, 8);
     rawCommandGroupLayout->setSpacing(4);
-    rawCommandGroupLayout->addWidget(new QLabel(QString::fromUtf8("相机指令")));
+    rawCommandGroupLayout->addWidget(new QLabel(QString::fromUtf8("输入命令")));
     auto* rawCommandHost = new QWidget;
     rawCommandLayout_ = new QVBoxLayout(rawCommandHost);
     rawCommandLayout_->setContentsMargins(0, 0, 0, 0);
     rawCommandGroupLayout->addWidget(rawCommandHost);
-    rawCommandStatusLabel_ = new QLabel(QString::fromUtf8("等待返回"));
+    rawCommandStatusLabel_ = new QLabel;
     rawCommandStatusLabel_->setWordWrap(true);
+    rawCommandStatusLabel_->hide();
     rawCommandGroupLayout->addWidget(rawCommandStatusLabel_);
-    rawCommandGroupLayout->addWidget(new QLabel(QString::fromUtf8("返回指令（最近 5 条，最新在上）")));
+    rawCommandGroupLayout->addWidget(new QLabel(QString::fromUtf8("返回命令")));
     responseList_ = new QListWidget;
     responseList_->setMinimumHeight(110);
     responseList_->setMaximumHeight(145);
@@ -349,7 +350,7 @@ void SerialCommandPackWidget::rebuildList()
         nameButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         nameButton->setToolTip(QString::fromUtf8("查看或编辑命令包详情"));
         auto* renameButton = new QPushButton(QString::fromUtf8("重命名"));
-        auto* sendButton = new QPushButton(QString::fromUtf8("发送命令"));
+        auto* sendButton = new QPushButton(QString::fromUtf8("发送"));
         sendButton->setEnabled(sendingAvailable_);
         sendButtons_.append(sendButton);
         rowLayout->addWidget(numberLabel);
@@ -533,6 +534,7 @@ void SerialCommandPackWidget::setRawGalvoCommandWidget(QWidget* widget)
 void SerialCommandPackWidget::setRawGalvoResponseText(const QString& text)
 {
     rawCommandStatusLabel_->setText(text);
+    rawCommandStatusLabel_->setVisible(!text.isEmpty());
 }
 
 void SerialCommandPackWidget::appendRawGalvoResponse(const QString& responseText)
