@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 
+# 分类配置中的依赖路径是唯一来源；构建预设只指定构建类型和输出目录。
+include(cmake/HtmsrEnvironment.cmake)
+
 project(HTMSR VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -9,8 +12,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded PCL/VTK point cloud viewer" ON)
 option(HTMSR_REQUIRE_VTK_VIEWER "Fail configuration if the embedded VTK Qt point cloud viewer cannot be enabled" OFF)
 option(HTMSR_ENABLE_HIK_CAMERA "Build Hikrobot MVS camera acquisition support" OFF)
-set(HIK_MVS_ROOT "C:/ENVIORNMENT/MVS" CACHE PATH "Path to Hikrobot MVS SDK root")
-set(HIK_MVS_RUNTIME_DIR "C:/Program Files (x86)/Common Files/MVS/Runtime/Win64_x64" CACHE PATH "Path to Hikrobot MVS runtime dll directory")
 
 function(htmsr_normalize_compile_definitions output_variable)
     set(normalized_definitions)
@@ -200,28 +201,16 @@ function(htmsr_add_runtime_copy_commands target)
 endfunction()
 
 find_package(OpenCV REQUIRED)
-find_package(Eigen3 QUIET)
-if(NOT Eigen3_FOUND)
-    set(HTMSR_EIGEN_INCLUDE_DIR "" CACHE PATH "Path to an Eigen include directory that contains Eigen/Core")
-    if(NOT HTMSR_EIGEN_INCLUDE_DIR)
-        foreach(candidate
-            "C:/ENVIORNMENT/ceresLib/Eigen"
-            "C:/ENVIORNMENT/PCL/PCL 1.12.1/3rdParty/Eigen/eigen3"
-        )
-            if(EXISTS "${candidate}/Eigen/Core")
-                set(HTMSR_EIGEN_INCLUDE_DIR "${candidate}" CACHE PATH "Path to an Eigen include directory that contains Eigen/Core" FORCE)
-                break()
-            endif()
-        endforeach()
-    endif()
-
+if(HTMSR_EIGEN_INCLUDE_DIR)
     if(NOT EXISTS "${HTMSR_EIGEN_INCLUDE_DIR}/Eigen/Core")
-        message(FATAL_ERROR "Eigen was not found. Set HTMSR_EIGEN_INCLUDE_DIR to a directory that contains Eigen/Core.")
+        message(FATAL_ERROR "Eigen was not found. Set HTMSR_EIGEN_INCLUDE_DIR in config/environment.ini to a directory that contains Eigen/Core.")
     endif()
 
     add_library(Eigen3::Eigen INTERFACE IMPORTED)
     target_include_directories(Eigen3::Eigen INTERFACE "${HTMSR_EIGEN_INCLUDE_DIR}")
     message(STATUS "Using Eigen headers from ${HTMSR_EIGEN_INCLUDE_DIR}")
+else()
+    find_package(Eigen3 REQUIRED)
 endif()
 # PCL 1.12.1 的 Windows 安装包会在 PCLConfig.cmake 中使用 string(APPEND)
 # 追加 BOOST_DEFINITIONS。如果 Boost 包已经设置过同名变量，两个 -D 片段
@@ -238,6 +227,14 @@ foreach(pcl_library IN LISTS PCL_LIBRARIES)
     list(APPEND HTMSR_PCL_CORE_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
 endforeach()
 find_package(Qt5 REQUIRED COMPONENTS Widgets Concurrent OpenGL)
+
+add_library(htmsr_config src/app/services/ConfigFiles.cpp)
+target_include_directories(htmsr_config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(htmsr_config PUBLIC Qt5::Core)
+target_compile_definitions(htmsr_config PRIVATE HTMSR_DEFAULT_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+if(MSVC)
+    target_compile_options(htmsr_config PRIVATE /utf-8)
+endif()
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -312,9 +309,10 @@ option(HTMSR_BUILD_CAPTURE_TESTS "Build hardware-trigger stereo capture simulati
 if(HTMSR_BUILD_CAPTURE_TESTS)
     find_package(Threads REQUIRED)
     enable_testing()
+    add_test(NAME build_environment COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/test/HtmsrBuildConfigTests.cmake)
     add_executable(htmsr_capture_tests
-        tests/HardwareTriggeredStereoCaptureTests.cpp
-        tests/GalvoCaptureWorkflowTests.cpp
+        test/HardwareTriggeredStereoCaptureTests.cpp
+        test/GalvoCaptureWorkflowTests.cpp
         src/app/acquisition/HardwareTriggeredStereoCapture.cpp
         src/app/acquisition/GalvoCaptureSupport.cpp
         src/app/acquisition/AcquisitionTypes.cpp
@@ -330,12 +328,32 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
     add_test(NAME hardware_trigger_stereo_capture COMMAND htmsr_capture_tests)
 
     if(WIN32)
+        add_executable(htmsr_config_tests
+            test/ConfigFilesTests.cpp
+            test/AppConfigPersistenceTests.cpp
+            src/app/services/AppConfigService.cpp
+            src/app/ui/AcquisitionPanel.cpp
+            src/app/ui/AcquisitionPanel.h
+            src/app/ui/SerialCommandPackWidget.cpp
+            src/app/ui/SerialCommandPackWidget.h
+            src/app/acquisition/AcquisitionTypes.cpp
+            src/app/acquisition/GalvoController.cpp
+            src/app/acquisition/GalvoCaptureSupport.cpp
+        )
+        target_link_libraries(htmsr_config_tests PRIVATE htmsr_core htmsr_config Qt5::Widgets)
+        target_compile_definitions(htmsr_config_tests PRIVATE HTMSR_WITH_HIK_CAMERA=0)
+        if(MSVC)
+            target_compile_options(htmsr_config_tests PRIVATE /utf-8)
+        endif()
+        add_test(NAME config_files COMMAND htmsr_config_tests)
+        set_tests_properties(config_files PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
         add_executable(htmsr_serial_diagnostics_tests
-            tests/SerialDiagnosticsTests.cpp
-            tests/AppConfigPersistenceTests.cpp
-            tests/CalibrationWorkflowTests.cpp
-            tests/ReconstructionStorageTests.cpp
-            tests/ResultExportTests.cpp
+            test/SerialDiagnosticsTests.cpp
+            test/AppConfigPersistenceTests.cpp
+            test/CalibrationWorkflowTests.cpp
+            test/ReconstructionStorageTests.cpp
+            test/ResultExportTests.cpp
             src/app/services/AppConfigService.cpp
             src/app/services/CalibrationCaptureSessionService.cpp
             src/app/services/ReconstructionCaptureSessionService.cpp
@@ -349,7 +367,7 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
             src/app/ui/AcquisitionPanel.h
         )
         target_include_directories(htmsr_serial_diagnostics_tests PRIVATE src)
-        target_link_libraries(htmsr_serial_diagnostics_tests PRIVATE htmsr_core Qt5::Widgets)
+        target_link_libraries(htmsr_serial_diagnostics_tests PRIVATE htmsr_core htmsr_config Qt5::Widgets)
         target_compile_definitions(htmsr_serial_diagnostics_tests PRIVATE HTMSR_WITH_HIK_CAMERA=0)
         if(MSVC)
             target_compile_options(htmsr_serial_diagnostics_tests PRIVATE /utf-8)
@@ -358,7 +376,7 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
         set_tests_properties(serial_diagnostics PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
         add_executable(htmsr_logging_tests
-            tests/LoggingTests.cpp
+            test/LoggingTests.cpp
             src/app/services/FileLogSink.cpp
             src/app/services/QtLogSink.cpp
             src/app/services/QtLogSink.h
@@ -376,25 +394,25 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
 endif()
 
 if(HTMSR_ENABLE_HIK_CAMERA)
-    set(HIK_MVS_INCLUDE_DIR "${HIK_MVS_ROOT}/Development/Includes" CACHE PATH "Path to Hikrobot MVS include directory")
-    set(HIK_MVS_LIBRARY "${HIK_MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib" CACHE FILEPATH "Path to Hikrobot MVS x64 import library")
+    set(HIK_MVS_INCLUDE_DIR "${HIK_MVS_ROOT}/Development/Includes" CACHE PATH "Path to Hikrobot MVS include directory" FORCE)
+    set(HIK_MVS_LIBRARY "${HIK_MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib" CACHE FILEPATH "Path to Hikrobot MVS x64 import library" FORCE)
 
     if(NOT EXISTS "${HIK_MVS_INCLUDE_DIR}/MvCameraControl.h")
-        message(FATAL_ERROR "Hikrobot MVS header was not found. Set HIK_MVS_INCLUDE_DIR to a directory that contains MvCameraControl.h.")
+        message(FATAL_ERROR "Hikrobot MVS header was not found. Check HIK_MVS_ROOT in config/environment.ini.")
     endif()
     if(NOT EXISTS "${HIK_MVS_LIBRARY}")
-        message(FATAL_ERROR "Hikrobot MVS library was not found. Set HIK_MVS_LIBRARY to MvCameraControl.lib.")
+        message(FATAL_ERROR "Hikrobot MVS library was not found. Check HIK_MVS_ROOT in config/environment.ini.")
     endif()
 
     if(HTMSR_BUILD_CAPTURE_TESTS)
         add_executable(htmsr_hik_configuration_tests
-            tests/HikCameraConfigurationTests.cpp
+            test/HikCameraConfigurationTests.cpp
             src/app/acquisition/HikCameraDevice.cpp
             src/core/Logger.cpp
         )
         set_target_properties(htmsr_hik_configuration_tests PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
         target_include_directories(htmsr_hik_configuration_tests PRIVATE
-            tests/fakes src ${OpenCV_INCLUDE_DIRS} "${HIK_MVS_INCLUDE_DIR}")
+            test/fakes src ${OpenCV_INCLUDE_DIRS} "${HIK_MVS_INCLUDE_DIR}")
         target_link_libraries(htmsr_hik_configuration_tests PRIVATE Eigen3::Eigen ${OpenCV_LIBS} Threads::Threads)
         target_compile_definitions(htmsr_hik_configuration_tests PRIVATE NOMINMAX)
         if(MSVC)
@@ -410,6 +428,16 @@ endif()
 
 add_executable(htmsr_app WIN32 ${HTMSR_APP_SOURCES})
 
+if(WIN32 AND OPENNI2_LIBRARY)
+    get_filename_component(HTMSR_OPENNI2_LIBRARY_DIRECTORY "${OPENNI2_LIBRARY}" DIRECTORY)
+    set(HTMSR_OPENNI2_RUNTIME "${HTMSR_OPENNI2_LIBRARY_DIRECTORY}/../Redist/OpenNI2.dll")
+    if(EXISTS "${HTMSR_OPENNI2_RUNTIME}")
+        add_custom_command(TARGET htmsr_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HTMSR_OPENNI2_RUNTIME}" "$<TARGET_FILE_DIR:htmsr_app>"
+            COMMENT "Copying configured OpenNI2 runtime")
+    endif()
+endif()
+
 target_include_directories(htmsr_app
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -419,6 +447,7 @@ target_include_directories(htmsr_app
 target_link_libraries(htmsr_app
     PRIVATE
         htmsr_core
+        htmsr_config
         Qt5::Widgets
         Qt5::Concurrent
         Qt5::OpenGL
@@ -492,9 +521,38 @@ if(HTMSR_QT_BIN_DIR)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(HTMSR_QT_PLATFORM_PLUGIN "qwindowsd.dll")
         set(HTMSR_QT_STYLE_PLUGIN "qwindowsvistastyled.dll")
+        set(HTMSR_QT_TEST_PLUGIN "qoffscreend.dll")
     else()
         set(HTMSR_QT_PLATFORM_PLUGIN "qwindows.dll")
         set(HTMSR_QT_STYLE_PLUGIN "qwindowsvistastyle.dll")
+        set(HTMSR_QT_TEST_PLUGIN "qoffscreen.dll")
+    endif()
+
+    if(HTMSR_BUILD_CAPTURE_TESTS AND WIN32)
+        if(NOT EXISTS "${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_TEST_PLUGIN}")
+            message(FATAL_ERROR "Qt offscreen test plugin is missing. Check Qt5_DIR in config/environment.ini: ${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_TEST_PLUGIN}")
+        endif()
+        # 测试插件路径也从所选 Qt 自动推导，避免依赖运行测试前手工设置环境变量。
+        set_tests_properties(config_files serial_diagnostics logging PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${HTMSR_QT_PLUGINS_DIR}/platforms"
+            TIMEOUT 60)
+        foreach(qt_test_target htmsr_config_tests htmsr_serial_diagnostics_tests htmsr_logging_tests)
+            target_compile_definitions(${qt_test_target} PRIVATE
+                HTMSR_QT_TEST_PLUGIN_ROOT="${HTMSR_QT_PLUGINS_DIR}"
+                HTMSR_QT_TEST_PLUGIN="${HTMSR_QT_TEST_PLUGIN}")
+            # 仅构建测试目标时也部署它所需的 Qt 运行库和离屏插件。
+            foreach(qt_test_library Qt5::Core Qt5::Gui Qt5::Widgets)
+                add_custom_command(TARGET ${qt_test_target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "$<TARGET_FILE:${qt_test_library}>" "$<TARGET_FILE_DIR:${qt_test_target}>")
+            endforeach()
+            add_custom_command(TARGET ${qt_test_target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${qt_test_target}>/platforms"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_TEST_PLUGIN}"
+                    "$<TARGET_FILE_DIR:${qt_test_target}>/platforms/${HTMSR_QT_TEST_PLUGIN}"
+                COMMENT "Deploying Qt offscreen plugin for ${qt_test_target}")
+        endforeach()
     endif()
 
     if(EXISTS "${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_PLATFORM_PLUGIN}")

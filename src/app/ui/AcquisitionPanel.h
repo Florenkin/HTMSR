@@ -92,6 +92,7 @@ signals:
     void reconstructCapturedFramesRequested();
     void exportReconstructionRequested();
     void sendRawGalvoCommandRequested(const QString& commandText);
+    void projectConfigChanged();
     void cameraConfigChanged();
     void galvoConfigChanged();
     void galvoMotionParametersChanged();
@@ -167,6 +168,7 @@ private:
     QPushButton* exportReconstructionButton_ = nullptr;
     QTabWidget* workflowTabs_ = nullptr;
 
+    AppProjectConfig baseConfig_;
     bool busy_ = false;
     bool calibrationCaptureActive_ = false;
     int calibrationCapturedFrameCount_ = 0;

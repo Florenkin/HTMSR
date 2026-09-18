@@ -1,5 +1,6 @@
 #include "app/ui/MainWindow.h"
 #include "app/services/FileLogSink.h"
+#include "app/services/ConfigFiles.h"
 #include "core/Types.h"
 
 #include <QApplication>
@@ -18,8 +19,18 @@ int main(int argc, char* argv[])
     const QString applicationDirectory = executablePath.isEmpty()
         ? QDir::currentPath()
         : QFileInfo(executablePath).absolutePath();
-    const QByteArray pluginRoot = QDir::toNativeSeparators(applicationDirectory).toLocal8Bit();
-    const QByteArray platformPluginPath = QDir::toNativeSeparators(QDir(applicationDirectory).filePath("platforms")).toLocal8Bit();
+    const auto configuredPluginRoot = htmsr::app::ConfigFiles::environmentPath("runtime/qtPluginDirectory");
+    const auto platformDirectory = QDir(applicationDirectory).filePath("platforms");
+    const auto selectedPluginRoot = QDir(platformDirectory).exists() || configuredPluginRoot.isEmpty()
+        ? applicationDirectory : configuredPluginRoot;
+    const QByteArray pluginRoot = QDir::toNativeSeparators(selectedPluginRoot).toLocal8Bit();
+    const QByteArray platformPluginPath = QDir::toNativeSeparators(QDir(selectedPluginRoot).filePath("platforms")).toLocal8Bit();
+    htmsr::app::ConfigFile environment(htmsr::app::ConfigFiles::path("environment.ini"));
+    QStringList dllDirectories;
+    for (const auto& directory : environment.value("runtime/extraDllDirectories", QString()).toString().split(';', Qt::SkipEmptyParts))
+        dllDirectories.append(QDir::toNativeSeparators(htmsr::app::ConfigFiles::resolvePath(directory.trimmed())));
+    if (!dllDirectories.isEmpty())
+        qputenv("PATH", (dllDirectories.join(';') + ';' + qEnvironmentVariable("PATH")).toLocal8Bit());
 
     // Qt Widgets 程序入口，先锁定当前可执行文件目录下的插件路径，避免 VS 调试环境误加载全局 Qt DLL 和插件。
     qputenv("QT_PLUGIN_PATH", pluginRoot);
@@ -30,16 +41,25 @@ int main(int argc, char* argv[])
 #endif
 
     QApplication app(argc, argv);
+    // 相对的工程输入和输出路径固定以 config 的父目录为基准。
+    QDir::setCurrent(QFileInfo(htmsr::app::ConfigFiles::directory()).absolutePath());
     // LogMessage 会跨线程通过 Qt signal 传递，需要注册元类型。
     qRegisterMetaType<htmsr::LogMessage>("htmsr::LogMessage");
 
     app.setLibraryPaths({
         applicationDirectory,
+        configuredPluginRoot,
         QDir(applicationDirectory).filePath("platforms"),
         QDir(applicationDirectory).filePath("styles")
     });
 
-    htmsr::app::FileLogSink fileLog;
+    htmsr::app::AppConfigService bootstrap;
+    bootstrap.load();
+    htmsr::app::ConfigFile paths(htmsr::app::ConfigFiles::path("paths.ini"));
+    const auto logDirectory = htmsr::app::ConfigFiles::resolvePath(paths.value("paths/logDirectory", QStringLiteral("../log")).toString());
+    htmsr::app::FileLogSink fileLog(logDirectory);
+    if (!environment.error().isEmpty())
+        htmsr::Logger::instance().warning("Config", environment.error().toStdString());
     int exitCode = 0;
     {
         // 文件日志先于窗口启动，并持续到后台任务和窗口完成销毁。

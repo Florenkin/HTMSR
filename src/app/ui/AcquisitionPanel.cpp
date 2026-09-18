@@ -30,8 +30,6 @@ namespace htmsr::app {
 namespace {
 
 constexpr char kDefaultOutputDirectory[] = "C:/PROJECT/HTMSR/output";
-constexpr double kCameraGain = 15.0;
-constexpr int kLaserDuty = 100;
 
 QWidget* wrapPathRow(QLineEdit* edit, QPushButton* button)
 {
@@ -342,6 +340,16 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
         emit galvoMotionParametersChanged();
     });
     connect(galvoSpeedSpin_, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, [this](int) { emit galvoConfigChanged(); });
+    // 所有可编辑的算法和采集参数都通知自动保存；恢复配置时由面板阻断信号。
+    for (auto* spin : findChildren<QSpinBox*>())
+        connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { emit projectConfigChanged(); });
+    for (auto* spin : findChildren<QDoubleSpinBox*>())
+        connect(spin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) { emit projectConfigChanged(); });
+    for (auto* combo : {laserModeCombo_, laserColorCombo_, reconstructionCaptureModeCombo_})
+        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { emit projectConfigChanged(); });
+    connect(removeEndpointsCheck_, &QCheckBox::toggled, this, [this](bool) { emit projectConfigChanged(); });
+    for (auto* edit : {leftCalibrationEdit_, rightCalibrationEdit_, leftReconstructionEdit_, rightReconstructionEdit_, calibrationFileEdit_})
+        connect(edit, &QLineEdit::textChanged, this, [this]() { emit projectConfigChanged(); });
     triggerLineSpin_->setEnabled(reconstructionCaptureModeCombo_->currentIndex() == 0);
     updateDerivedFrameCount();
     setSerialPorts(enumerateSerialPortNames());
@@ -436,14 +444,14 @@ StereoCameraConfig AcquisitionPanel::stereoCameraConfig() const
     config.outputDirectory = outputDirectory_;
     config.leftParameters.exposureTime = exposureTimeSpin_->value();
     config.rightParameters.exposureTime = exposureTimeSpin_->value();
-    config.leftParameters.gain = kCameraGain;
-    config.rightParameters.gain = kCameraGain;
+    config.leftParameters.gain = baseConfig_.acquisitionParameters.cameraGain;
+    config.rightParameters.gain = baseConfig_.acquisitionParameters.cameraGain;
     config.leftParameters.useHardwareTrigger = false;
     config.rightParameters.useHardwareTrigger = false;
     config.leftParameters.triggerSourceLine = triggerLineSpin_->value();
     config.rightParameters.triggerSourceLine = triggerLineSpin_->value();
-    config.leftParameters.grabTimeoutMs = 1000;
-    config.rightParameters.grabTimeoutMs = 1000;
+    config.leftParameters.grabTimeoutMs = baseConfig_.acquisitionParameters.grabTimeoutMs;
+    config.rightParameters.grabTimeoutMs = baseConfig_.acquisitionParameters.grabTimeoutMs;
     return config;
 }
 
@@ -463,26 +471,27 @@ IntegratedScanConfig AcquisitionPanel::integratedScanConfig() const
     config.stereoCamera.rightParameters.useHardwareTrigger = useHardwareTrigger;
     config.totalRotationAngleDeg = galvoTotalRotationAngleSpin_->value();
     config.galvo.portName = galvoPortName_;
-    config.galvo.baudRate = 115200;
-    config.galvo.commandTimeoutMs = 500;
+    const auto& stored = baseConfig_.acquisitionParameters;
+    config.galvo.baudRate = stored.baudRate;
+    config.galvo.commandTimeoutMs = stored.commandTimeoutMs;
     // 控制器同步命令不决定海康相机是否启用硬触发。
-    config.galvo.syncMode = GalvoSyncMode::Sync;
-    config.galvo.direction = GalvoScanDirection::Forward;
-    config.galvo.captureIntervalMs = 30;
-    config.galvo.continuousCaptureWaitMs = 30;
+    config.galvo.syncMode = stored.syncMode ? GalvoSyncMode::Sync : GalvoSyncMode::Async;
+    config.galvo.direction = stored.reverseDirection ? GalvoScanDirection::Reverse : GalvoScanDirection::Forward;
+    config.galvo.captureIntervalMs = stored.captureIntervalMs;
+    config.galvo.continuousCaptureWaitMs = stored.continuousCaptureWaitMs;
     config.galvo.stepAngleDeg = galvoStepAngleSpin_->value();
     config.galvo.autoRotationAngleDeg = static_cast<int>(std::lround(config.totalRotationAngleDeg));
     config.galvo.forwardSpeedMs = galvoSpeedSpin_->value();
     config.galvo.reverseSpeedMs = galvoSpeedSpin_->value();
-    config.galvo.laserDuty = kLaserDuty;
-    config.galvo.voltageRangeV = 7.0;
+    config.galvo.laserDuty = stored.laserDuty;
+    config.galvo.voltageRangeV = stored.voltageRangeV;
     config.forceRecalibration = false;
     return config;
 }
 
 AppProjectConfig AcquisitionPanel::projectConfig() const
 {
-    AppProjectConfig config;
+    AppProjectConfig config = baseConfig_;
     config.leftCalibrationDirectory = textOf(leftCalibrationEdit_);
     config.rightCalibrationDirectory = textOf(rightCalibrationEdit_);
     const auto reconstruction = reconstructionInput({});
@@ -510,7 +519,7 @@ CalibrationInput AcquisitionPanel::calibrationInput() const
     input.rightDirectory = textOf(rightCalibrationEdit_);
     input.boardSize = cv::Size(boardWidthSpin_->value(), boardHeightSpin_->value());
     input.squareSize = cv::Size2d(squareWidthSpin_->value(), squareHeightSpin_->value());
-    input.imageRange = { -1, -1 };
+    input.imageRange = baseConfig_.calibrationInput.imageRange;
     input.outputFile = textOf(calibrationFileEdit_);
     return input;
 }
@@ -520,8 +529,9 @@ ReconstructionInput AcquisitionPanel::reconstructionInput(const CalibrationResul
     ReconstructionInput input;
     input.leftDirectory = pathOf(leftReconstructionEdit_);
     input.rightDirectory = pathOf(rightReconstructionEdit_);
-    input.imageRange = { -1, -1 };
+    input.imageRange = baseConfig_.reconstructionImageRange;
     input.calibration = calibration;
+    input.laserConfig.filterStegerPoints = baseConfig_.laserConfig.filterStegerPoints;
     input.laserConfig.mode = laserModeCombo_->currentIndex() == 1 ? LaserExtractionMode::Steger : LaserExtractionMode::GrayCentroid;
     input.laserConfig.laserColor = static_cast<LaserColor>(laserColorCombo_->currentIndex() == 0 ? 2 : laserColorCombo_->currentIndex() == 1 ? 1 : laserColorCombo_->currentIndex() == 2 ? 0 : 3);
     input.laserConfig.leftRoi = makeRect(leftRoiXSpin_, leftRoiYSpin_, leftRoiWSpin_, leftRoiHSpin_);
@@ -541,6 +551,7 @@ void AcquisitionPanel::setProjectConfig(const AppProjectConfig& config)
 {
     // 恢复界面参数时不下发振镜命令或重启相机预览。
     const QSignalBlocker blocker(this);
+    baseConfig_ = config;
     const auto& acquisition = config.acquisitionParameters;
     exposureTimeSpin_->setValue(acquisition.exposureTime);
     reconstructionCaptureModeCombo_->setCurrentIndex(acquisition.useHardwareTrigger ? 0 : 1);
@@ -548,11 +559,11 @@ void AcquisitionPanel::setProjectConfig(const AppProjectConfig& config)
     galvoTotalRotationAngleSpin_->setValue(acquisition.totalRotationAngleDeg);
     galvoStepAngleSpin_->setValue(acquisition.stepAngleDeg);
     galvoSpeedSpin_->setValue(acquisition.speedMs);
-    leftCalibrationEdit_->setText(QString::fromStdString(config.leftCalibrationDirectory));
-    rightCalibrationEdit_->setText(QString::fromStdString(config.rightCalibrationDirectory));
-    // 输入目录每次启动保持为空，由本次采集或用户选择提供。
-    setReconstructionDirectories({}, {});
-    calibrationFileEdit_->setText(QString::fromStdString(config.calibrationFile));
+    leftCalibrationEdit_->setText(QString::fromStdString(config.restoreInputPaths ? config.leftCalibrationDirectory : std::string{}));
+    rightCalibrationEdit_->setText(QString::fromStdString(config.restoreInputPaths ? config.rightCalibrationDirectory : std::string{}));
+    setReconstructionDirectories(config.restoreInputPaths ? config.leftReconstructionDirectory : std::string{},
+        config.restoreInputPaths ? config.rightReconstructionDirectory : std::string{});
+    calibrationFileEdit_->setText(QString::fromStdString(config.restoreInputPaths ? config.calibrationFile : std::string{}));
     outputDirectory_ = config.outputDirectory.empty() ? kDefaultOutputDirectory : config.outputDirectory;
     boardWidthSpin_->setValue(config.calibrationInput.boardSize.width);
     boardHeightSpin_->setValue(config.calibrationInput.boardSize.height);

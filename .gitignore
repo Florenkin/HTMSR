@@ -17,4 +17,3 @@ __pycache__/
 point_cloud.txt
 stereo_calibration.yml
 CMakeUserPresets.json
-scripts/htmsr_environment.local.json

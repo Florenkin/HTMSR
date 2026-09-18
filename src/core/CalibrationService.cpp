@@ -1,4 +1,6 @@
 #include "core/CalibrationService.h"
+#include <filesystem>
+#include <fstream>
 
 #include "core/FileSystemUtils.h"
 #include "core/Logger.h"
@@ -383,6 +385,26 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
 bool CalibrationService::loadCalibration(const std::string& filename, CalibrationResult& result) const
 {
     try {
+        // 启动自动恢复也会读取此文件；先拒绝明显不是 OpenCV 存储格式的文本，
+        // 避免把普通文本传入旧版 FileStorage 的错误路径。
+        std::ifstream input(std::filesystem::u8path(filename), std::ios::binary);
+        if (!input) {
+            Logger::instance().error("Calibration", "Failed to open calibration file: " + filename);
+            return false;
+        }
+        char buffer[64] = {};
+        input.read(buffer, sizeof(buffer));
+        std::string header(buffer, static_cast<size_t>(input.gcount()));
+        input.close();
+        const bool compressed = header.size() >= 2 &&
+            static_cast<unsigned char>(header[0]) == 0x1f && static_cast<unsigned char>(header[1]) == 0x8b;
+        if (header.compare(0, 3, "\xef\xbb\xbf") == 0) header.erase(0, 3);
+        const auto start = header.find_first_not_of(" \t\r\n");
+        if (!compressed && (start == std::string::npos ||
+            (header.compare(start, 5, "%YAML") != 0 && header[start] != '<' && header[start] != '{'))) {
+            Logger::instance().error("Calibration", "Invalid calibration file format: " + filename);
+            return false;
+        }
         // 保持 OpenCV FileStorage 格式，兼容参考代码生成的 yml 标定文件。
         cv::FileStorage fs(filename, cv::FileStorage::READ);
         if (!fs.isOpened()) {

@@ -9,7 +9,7 @@ namespace htmsr::app {
 class AppConfigService {
 public:
     /*
-        函数功能：从系统配置中读取上次保存的软件工程参数
+        函数功能：从 config 分类配置文件中读取软件工程参数
         输入：
             无
         输出：
@@ -18,13 +18,17 @@ public:
     AppProjectConfig load() const;
 
     /*
-        函数功能：将当前软件工程参数保存到系统配置
+        函数功能：将当前参数保存到 config，并保留中文注释
         输入：
             config：待保存的软件工程配置
         输出：
-            无
+            返回值：成功为 true，失败为 false；lastError 提供错误说明
     */
-    void save(const AppProjectConfig& config) const;
+    bool save(const AppProjectConfig& config) const;
+    QString lastError() const;
+
+private:
+    mutable QString lastError_;
 };
 
 } // namespace htmsr::app

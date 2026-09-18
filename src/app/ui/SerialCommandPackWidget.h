@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QJsonObject>
 #include <QString>
 #include <QWidget>
 
@@ -44,6 +45,7 @@ private:
     struct CommandPack {
         QString name;
         QString content;
+        QJsonObject annotations;
     };
 
     void loadPacks();

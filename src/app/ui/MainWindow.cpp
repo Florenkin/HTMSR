@@ -3,6 +3,7 @@
 #include "app/acquisition/GalvoController.h"
 #include "app/acquisition/GalvoCaptureSupport.h"
 #include "app/services/ReconstructionStorage.h"
+#include "app/services/ConfigAutoSave.h"
 #include "app/services/ResultExportService.h"
 #if HTMSR_WITH_HIK_CAMERA
 #include "app/acquisition/HikCameraDevice.h"
@@ -280,6 +281,11 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->addPermanentWidget(progressBar_);
 
     acquisitionPanel_->setProjectConfig(configService_.load());
+    configAutoSave_ = new ConfigAutoSave([this]() {
+        if (!configService_.save(acquisitionPanel_->projectConfig()))
+            statusBar()->showMessage(QString::fromUtf8("参数保存失败：%1").arg(configService_.lastError()));
+    }, this);
+    connect(acquisitionPanel_, &AcquisitionPanel::projectConfigChanged, configAutoSave_, &ConfigAutoSave::schedule);
     refreshProjectTree();
 
     connect(&calibrationWatcher_, &QFutureWatcher<CalibrationResult>::finished, this, &MainWindow::onCalibrationFinished);
@@ -292,6 +298,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&reconstructionGalvoPreflightWatcher_, &QFutureWatcher<GalvoMotionVerificationResult>::finished, this, &MainWindow::onReconstructionGalvoPreflightFinished);
     connect(&galvoMotionParametersWatcher_, &QFutureWatcher<GalvoMotionVerificationResult>::finished, this, &MainWindow::onGalvoMotionParametersApplied);
     connect(&serialCommandPackWatcher_, &QFutureWatcher<SerialCommandPackSendResult>::finished, this, &MainWindow::onSerialCommandPackFinished);
+    // 恢复已有标定结果只读取文件，不触发采集或振镜动作。
+    const auto restoredCalibration = acquisitionPanel_->projectConfig().calibrationFile;
+    if (!restoredCalibration.empty()) {
+        try {
+            calibrationService_.loadCalibration(restoredCalibration, calibration_);
+        } catch (const std::exception& ex) {
+            Logger::instance().warning("Config", "无法恢复标定结果：" + std::string(ex.what()));
+        }
+        updateResultAvailability();
+    }
     connect(serialCommandPackWidget_, &SerialCommandPackWidget::sendRequested, this, &MainWindow::sendSerialCommandPack);
     connect(acquisitionPanel_, &AcquisitionPanel::refreshDevicesRequested, this, &MainWindow::refreshAcquisitionDevices);
     connect(acquisitionPanel_, &AcquisitionPanel::captureCalibrationFrameRequested, this, &MainWindow::captureCalibrationFrame);
@@ -382,7 +398,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     shuttingDown_.store(true);
     acquisitionPanel_->commitPendingEdits();
-    configService_.save(acquisitionPanel_->projectConfig());
+    configAutoSave_->flush();
     serialCommandPackStopRequested_->store(true);
     stopLivePreview();
     QCoreApplication::removePostedEvents(this);

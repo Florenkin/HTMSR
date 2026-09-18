@@ -12,6 +12,13 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QSettings>
+#include <QDir>
+#include <QFile>
+#include <QSaveFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include "app/services/ConfigFiles.h"
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QTextDocument>
@@ -281,39 +288,85 @@ SerialCommandPackWidget::SerialCommandPackWidget(QWidget* parent)
 
 void SerialCommandPackWidget::loadPacks()
 {
-    QSettings settings(QStringLiteral("HTMSR"), QStringLiteral("HTMSR"));
+    const auto filePath = ConfigFiles::path("command_packs.json");
+    QFile file(filePath);
+    if (file.exists()) {
+        QJsonParseError error;
+        if (!file.open(QIODevice::ReadOnly)) {
+            QMessageBox::warning(this, QString::fromUtf8("读取命令包失败"), file.errorString());
+            return;
+        }
+        const auto document = QJsonDocument::fromJson(file.readAll(), &error);
+        if (error.error != QJsonParseError::NoError || !document.isObject() || !document.object().value("packs").isArray()) {
+            QMessageBox::warning(this, QString::fromUtf8("读取命令包失败"),
+                QString::fromUtf8("请检查 %1 的 JSON 格式。原文件不会被覆盖。").arg(filePath));
+            return;
+        }
+        for (const auto& item : document.object().value("packs").toArray()) {
+            const auto pack = item.toObject();
+            const auto name = pack.value("name").toString().trimmed();
+            if (!name.isEmpty()) packs_.append({name, pack.value("content").toString(), pack});
+        }
+        return;
+    }
+    // 首次迁移旧版命令包；空列表也要保存，避免恢复已删除的默认命令包。
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope,
+        QStringLiteral("HTMSR"), QStringLiteral("HTMSR"));
     const bool initialized = settings.value(QStringLiteral("serialCommandPacksInitialized"), false).toBool();
     const int count = settings.beginReadArray(QStringLiteral("serialCommandPacks"));
     for (int i = 0; i < count; ++i) {
         settings.setArrayIndex(i);
-        const QString name = settings.value(QStringLiteral("name")).toString().trimmed();
-        if (!name.isEmpty()) {
-            packs_.append({ name, settings.value(QStringLiteral("content")).toString() });
-        }
+        const auto name = settings.value(QStringLiteral("name")).toString().trimmed();
+        if (!name.isEmpty()) packs_.append({name, settings.value(QStringLiteral("content")).toString()});
     }
     settings.endArray();
-    if (packs_.isEmpty() && !initialized) {
-        packs_.append({ QString::fromUtf8("激光开关测试"),
-            QString::fromUtf8("55 AA 01 1A 1A    #打开激光\nWAIT 1000        #等待一秒\n55 AA 01 1B 1B    #关闭激光") });
-        persistPacks();
-    }
+    if (packs_.isEmpty() && !initialized)
+        packs_.append({QString::fromUtf8("激光开关测试"),
+            QString::fromUtf8("55 AA 01 1A 1A    #打开激光\\nWAIT 1000        #等待一秒\\n55 AA 01 1B 1B    #关闭激光")});
+    persistPacks();
 }
 
 bool SerialCommandPackWidget::persistPacks()
 {
-    QSettings settings(QStringLiteral("HTMSR"), QStringLiteral("HTMSR"));
-    settings.remove(QStringLiteral("serialCommandPacks"));
-    settings.beginWriteArray(QStringLiteral("serialCommandPacks"), packs_.size());
-    for (int i = 0; i < packs_.size(); ++i) {
-        settings.setArrayIndex(i);
-        settings.setValue(QStringLiteral("name"), packs_.at(i).name);
-        settings.setValue(QStringLiteral("content"), packs_.at(i).content);
+    const auto filePath = ConfigFiles::path("command_packs.json");
+    QJsonObject object;
+    QFile previous(filePath);
+    if (previous.exists()) {
+        QJsonParseError error;
+        if (!previous.open(QIODevice::ReadOnly)) {
+            QMessageBox::warning(this, QString::fromUtf8("保存命令包失败"), previous.errorString());
+            return false;
+        }
+        const auto document = QJsonDocument::fromJson(previous.readAll(), &error);
+        if (error.error != QJsonParseError::NoError || !document.isObject() || !document.object().value("packs").isArray()) {
+            QMessageBox::warning(this, QString::fromUtf8("保存命令包失败"), QString::fromUtf8("现有配置格式损坏，请先手动修正；原文件未被覆盖。"));
+            return false;
+        }
+        object = document.object();
+        previous.close();
     }
-    settings.endArray();
-    settings.setValue(QStringLiteral("serialCommandPacksInitialized"), true);
-    settings.sync();
-    if (settings.status() != QSettings::NoError) {
-        QMessageBox::warning(this, QString::fromUtf8("保存命令包失败"), QString::fromUtf8("无法保存到应用设置，下次启动可能无法恢复命令包。"));
+    if (!object.contains("_说明")) object.insert("_说明", QString::fromUtf8("命令包配置；内容中 \\n 表示换行，# 后面的文字为命令注释。"));
+    if (!object.contains("_initialized说明")) object.insert("_initialized说明", QString::fromUtf8("已初始化标记；空列表表示用户已经删除全部命令包。"));
+    object.insert("initialized", true);
+    if (!object.contains("_packs说明")) object.insert("_packs说明", QString::fromUtf8("命令包列表，按界面显示顺序保存。"));
+    QJsonArray array;
+    for (const auto& pack : packs_) {
+        QJsonObject item = pack.annotations;
+        if (!item.contains("_name说明")) item.insert("_name说明", QString::fromUtf8("命令包名称，在预览栏显示。"));
+        item.insert("name", pack.name);
+        if (!item.contains("_content说明")) item.insert("_content说明", QString::fromUtf8("命令文本；每行一条十六进制命令或 WAIT 毫秒数。"));
+        item.insert("content", pack.content);
+        array.append(item);
+    }
+    object.insert("packs", array);
+    if (!QDir().mkpath(ConfigFiles::directory())) {
+        QMessageBox::warning(this, QString::fromUtf8("保存命令包失败"), QString::fromUtf8("无法创建配置目录：%1").arg(ConfigFiles::directory()));
+        return false;
+    }
+    QSaveFile output(filePath);
+    const auto bytes = QJsonDocument(object).toJson(QJsonDocument::Indented);
+    if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit()) {
+        QMessageBox::warning(this, QString::fromUtf8("保存命令包失败"), output.errorString());
         return false;
     }
     return true;

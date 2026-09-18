@@ -1,116 +1,61 @@
-# 测试素材目录说明
+# 自动化测试代码
 
-本目录用于集中存放 HTMSR 软件测试素材与测试结果，按用途分为四类：
+`C:\PROJECT\HTMSR\test` 是项目唯一的测试代码目录，存放自动化测试源代码、测试专用辅助代码和测试说明。后续新增测试统一放在这里，不再创建 `tests` 目录。
 
-- `01_calibration`
-  标定素材，用于测试双目标定流程是否可以正常运行。
-- `02_reconstruction`
-  重建素材，用于测试激光中心线提取、左右点匹配和三维重建流程。
-- `03_reference_results`
-  参考结果，用于和软件输出结果做对比，不是当前程序的直接输入。
-- `04_actual_outputs`
-  程序实际运行后生成的输出结果，建议将标定文件、点云结果、截图和日志统一放在这里。
+`fakes/MvCameraControl.h` 是海康相机配置测试使用的模拟 SDK 接口头文件。测试使用的图像和点云优先在运行时生成到临时目录；需要保留的截图、日志及结果放在 `out` 下，不混入本目录。
 
-## 目录结构
+## 双目硬触发采集模拟测试
 
-```text
-test
-├── 01_calibration
-│   └── opencv_official_stereo_chessboard
-│       ├── left
-│       ├── right
-│       └── SOURCE_README.txt
-├── 02_reconstruction
-│   └── laser_scan_sequence_case01
-│       ├── left
-│       └── right
-└── 03_reference_results
-    └── point_cloud_txt
-        ├── p3d_1.txt
-        └── p3d_2.txt
-└── 04_actual_outputs
-    ├── calibration
-    ├── point_cloud
-    └── logs_and_screenshots
-```
+不连接串口、不启动激光、不移动振镜，用可控的两路图像序列验证接收与配对逻辑。
 
-## 在 HTMSR 中的使用方式
+启用 `HTMSR_BUILD_CAPTURE_TESTS=ON`，构建 `htmsr_capture_tests` 后通过 CTest 运行 `hardware_trigger_stereo_capture`。
+运行时需让 OpenCV 的 DLL 所在目录可从 PATH 找到。
 
-### 1. 标定测试
+Windows 下同时构建 `htmsr_serial_diagnostics_tests`，通过 CTest 运行 `serial_diagnostics`。
+配置保存检查使用临时 INI 目录并启动独立进程，验证重启后恢复角度、速度、曝光、采集模式、触发线及标定/重建参数，关闭前仍在编辑的数值也会保存；不会改写用户真实配置。
+标定流程检查使用模拟相机验证首次点击自动创建会话并保存图像、连续追加配对帧及结束后释放相机；使用六组生成的双目棋盘格图像验证离线标定、自动保存和重新加载，检查简化后的按钮、路径选择加载信号、忙碌状态及切换页面自动结束采集。不依赖实机或外部数据。
+重建保存检查使用临时目录和模拟相机验证 `reconstruction/capture` 下的时间戳会话、配对图像及 `reconstruction/result` 下对应的 TXT/PCD；重新加载点云验证坐标和点数，检查重复重建、单格式重名、并行保存、旧会话兼容、空/失败重建及不可写目录，不改动用户现有采集数据。
+重建目录流程检查验证初始左右目录为空、关闭路径恢复时不填入旧目录、采集后分别回填、当前选择覆盖先前采集路径、只选择一侧或清空任一侧后禁止重建及任务执行期间锁定两侧路径；使用任意名称且位于不同父目录的两个文件夹生成双目激光帧，用实际重建服务验证所选离线目录能够生成点云并自动保存、重新加载。独立进程验证旧版废弃路径不迁移，新版路径按启动恢复开关读取，数值参数记忆保持有效。
+结果导出检查验证标定 YML/YAML 与点云 PCD/TXT、缺省扩展名、中文目标路径、导出结果重新加载、无效结果/格式和保存失败时保留已有文件；检查两页的简化按钮、导出信号、独立结果可用状态及忙碌时禁用导出，不更改自动保存路径。
+它在 Qt 离屏模式下验证串口自动识别、缺失提示、多端口歧义及端口变化，并验证合并速度同时用于正反方向、固定增益和占空比以及采集目录内部传递；使用故意不存在的端口验证 Windows 错误能够传到预检弹窗。不连接真实振镜、不发送激光或运动命令。运行时将 `QT_QPA_PLATFORM_PLUGIN_PATH` 指向 Qt 的 `plugins/platforms` 目录。可为测试程序传入 `--render-preview <PNG路径>` 输出界面预览；离屏渲染时将 `QT_QPA_FONTDIR` 指向 Windows 字体目录，以正确显示中文。
 
-左标定目录：
+预览时加上 `--calibration-tab` 可显示简化后的标定界面。
 
-- `C:\PROJECT\HTMSR\test\01_calibration\opencv_official_stereo_chessboard\left`
+`htmsr_logging_tests` / CTest `logging` 使用临时目录验证 UTF-8 写入、线程并发、同时间戳防覆盖、关闭窗口后文件日志仍有效，以及 24 小时清理边界和保留无关文件。Qt 离屏检查两行默认高度、可扩展历史、调试日志过滤、事件时间和内存上限。测试不会修改实际 `log` 目录，可通过 `--render-preview <PNG路径>` 输出紧凑日志面板预览。
 
-右标定目录：
+覆盖：Line5/硬触发默认值、不同设备帧号起点、暂时无数据重试、接收快于保存、帧号跳变/重复、触发计数跳变、单侧无触发、尾帧缺失、丢包、无效元数据、队列满、写盘失败、扫描启动失败、多余触发及 32 位计数回绕。
 
-- `C:\PROJECT\HTMSR\test\01_calibration\opencv_official_stereo_chessboard\right`
+同时启用 `HTMSR_ENABLE_HIK_CAMERA=ON` 时，还可构建 `htmsr_hik_configuration_tests`，通过 CTest 运行 `hik_camera_configuration`。它使用 SDK 参数结构和模拟 SDK 函数直接执行生产相机配置代码，不连接设备。覆盖仅支持 `FrameBurstStart` 的相机、优先选择 `FrameStart`、清除其它触发门控、连拍帧数设为 1 并回读、不可写/缺失节点、无效触发类型、保留 Line5 和自由取流预览。
 
-建议优先尝试参数：
+## 实机验收
 
-- 棋盘格内角点：`9 x 6`
-- 方格尺寸：可先填一个一致测试值，例如 `25 x 25`
+1. 确认两台相机均支持 `TriggerSelector=FrameStart` 或 `FrameBurstStart`、`TriggerSource=Line5`。程序优先选择 `FrameStart`；只有 `FrameBurstStart` 时将 `AcquisitionBurstFrameCount` 设为 1 并回读，保证一次脉冲只拍一帧。日志应记录设备支持和实际选中的触发类型。同一振镜触发信号接到两台相机，信号电平/脉宽/极性符合设备规格。
+2. 先用较小总角度试扫。确认本次角度预检通过、同步和其它参数命令已下发、相机配置通过，日志明确记录双相机先就绪、再发送连续扫描命令。采集服务复用这次预检结果，不在批量参数写入后重复强制查询；同步查询不是启动采集的必需条件。
+3. 用示波器/逻辑分析仪核对：每次步进恰好产生一个共同触发脉冲，曝光时刻符合扫描需要。软件没有实际振镜位置反馈，不能仅凭保存序号证明角度正确。
+4. 扫描结束检查：`expected`、`leftReceived`、`rightReceived`、`savedPairs` 全部相等，且左右目录各有相同数量、同名配对的 BMP。当前默认参数为 40° / 0.02°，预计各 2000 张。
+5. 查看本次目录中的 `frame_audit.txt`：各自设备帧号连续；非零触发计数连续。两台相机历史计数起点可以不同；计数一直为零可能是机型不提供此元数据。
+6. 若任何环节失败，本次必须显示“未完整完成”，不能用于自动重建。已曝光但丢失的图像不能通过软件补拍成原角度的图像，应排查后重新扫描。
 
-说明：
+30ms 对应约 33.33 次触发/秒。曝光短于 30ms 并不代表相机读出、双相机 USB 传输或磁盘保存一定跟得上。
+程序使用 SDK 的 16 个顺序缓冲节点，以及每路最多 128MiB 的保存待处理队列；超过能力会明确失败，不使用“只取最新帧”方式掩盖漏帧。
 
-- 这套数据用于测试“标定流程是否跑通”。
-- 如果需要真实尺度正确的结果，必须使用真实棋盘格物理尺寸。
+两路接收线程和一路配对保存线程均在发送扫描命令前就绪。串口发送/刷新或固件启动等待期间收到的图像也立即配对保存，不等扫描启动函数返回。模拟测试覆盖启动函数持续阻塞到 40 对图像保存完毕、且队列仅能容纳 8 帧的情况，以及启动函数在产生图像后失败的情况。`frame_audit.txt` 和日志同时记录扫描启动调用耗时、首对保存延迟、每对平均/最长保存耗时及左右队列峰值；队列满只能证明保存没有跟上收图，不能单凭这一报错断定磁盘慢。
 
-### 2. 重建测试
+## 激光流程及参数预检回归
 
-左重建目录：
+同一测试还使用模拟振镜控制器验证：复用本次角度快照后不会再次被查询超时拦截；无快照入口仍执行角度写入、重连、回读验证；错误串口/角度/帧数快照不能复用；参数写入之间等待至少 150ms；正常流程只开关激光各一次；扫描启动失败、写盘异常、开激光命令部分失败时仍在断开串口前关闭激光；关激光失败会重试并明确报告。
+串口写入成功不等于物理激光状态已确认，实机仍需检查开关响应和帧数。
 
-- `C:\PROJECT\HTMSR\test\02_reconstruction\laser_scan_sequence_case01\left`
+## 分类配置回归
 
-右重建目录：
+Qt 界面测试会自动选择匹配当前构建的插件，默认使用离屏模式；CMake 也会部署测试所需的 Qt 运行库和离屏插件。通过 CTest 或直接启动构建目录中的测试程序，都不需要手工设置 Qt 插件路径。
 
-- `C:\PROJECT\HTMSR\test\02_reconstruction\laser_scan_sequence_case01\right`
+CTest 的 `build_environment` 执行 `HtmsrBuildConfigTests.cmake`，在临时目录模拟不同电脑的依赖路径。检查配置覆盖旧预设、空的 `CMAKE_PREFIX_PATH` 自动生成搜索目录、PCL 第三方目录自动发现、相对路径和带空格路径、额外前缀列表、依赖变化后缓存失效、相同配置缓存保留、Debug 覆盖顺序及损坏文件保护，不修改实际配置。可直接执行 `cmake -P test/HtmsrBuildConfigTests.cmake`。
 
-说明：
+启用现有测试开关后构建 `htmsr_config_tests`，通过 CTest 的 `config_files` 运行。使用 `HTMSR_CONFIG_DIR` 指向临时目录，并隔离旧版 Qt 设置；不读取或改写本机实际配置，不连接设备。
 
-- 这套数据是左右相机的激光图像序列。
-- 左右文件名一一对应，可直接按排序后配对。
-- 该数据不能用于标定，必须配合已有 `stereo_calibration.yml` 使用。
+检查分类文件和中文注释、旧数值及命令包迁移、手动修改优先、独立进程重启恢复、界面连续编辑合并保存、关闭前最后输入、文件专用参数到达算法与采集配置、路径恢复开关、依赖文件不被界面保存覆盖、无效数值和范围提示、损坏文件保护、保存失败及空命令列表。
 
-### 3. 参考结果
+## 程序启动检查
 
-参考点云目录：
-
-- `C:\PROJECT\HTMSR\test\03_reference_results\point_cloud_txt`
-
-说明：
-
-- `p3d_1.txt`、`p3d_2.txt` 是已有三维点云文本结果。
-- 当前 HTMSR 只能导出点云，暂不支持导入这些文件直接显示。
-- 它们主要用于和新重建结果做数量级、形状和分布上的对比。
-
-### 4. 程序实际输出
-
-建议将你后续测试软件时生成的内容放到这里：
-
-- 标定输出：
-  - `C:\PROJECT\HTMSR\test\04_actual_outputs\calibration`
-- 点云输出：
-  - `C:\PROJECT\HTMSR\test\04_actual_outputs\point_cloud`
-- 截图、日志、说明：
-  - `C:\PROJECT\HTMSR\test\04_actual_outputs\logs_and_screenshots`
-
-说明：
-
-- `03_reference_results` 是已有参考结果，不要和你新跑出来的结果混放。
-- `04_actual_outputs` 才是本次软件测试过程中真实生成的结果目录。
-
-## 测试建议顺序
-
-建议按下面顺序测试软件：
-
-1. 先用 `01_calibration` 测试双目标定流程能否正常运行。
-2. 得到有效的 `stereo_calibration.yml` 后，再用 `02_reconstruction` 测试重建流程。
-3. 将本次运行输出保存到 `04_actual_outputs`。
-4. 最后将 `04_actual_outputs` 中的新结果与 `03_reference_results` 中的点云做对比。
-
-## 注意事项
-
-- 标定素材和重建素材不要混用。
-- 重建时不要一次性先跑完整序列，建议先用较小图像范围测试。
-- 如果激光提取效果不好，优先调整 ROI 和阈值，而不是怀疑图像配对本身。
+`ApplicationStartupSmoke.ps1 -Executable <程序路径>` 是手动启动检查：启动指定程序，等待初始化日志并检查存活，将启动日志复制到 `out/startup-review`，然后只结束自身启动的进程。默认读取项目 `log` 目录，可用 `-LogDirectory` 覆盖。它会执行软件正常的设备发现及预览，不操作采集或振镜扫描，不加入默认 CTest。

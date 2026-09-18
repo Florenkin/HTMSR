@@ -154,10 +154,21 @@ struct AcquisitionParameterConfig {
     double stepAngleDeg = 0.02;
     double totalRotationAngleDeg = 40.0;
     int speedMs = 30;
+    double cameraGain = 15.0;
+    int grabTimeoutMs = 1000;
+    int baudRate = 115200;
+    int commandTimeoutMs = 500;
+    bool syncMode = true;
+    bool reverseDirection = false;
+    int captureIntervalMs = 30;
+    int continuousCaptureWaitMs = 30;
+    int laserDuty = 100;
+    double voltageRangeV = 7.0;
 };
 
 // 软件工程配置，用于 UI 参数持久化和默认参数恢复。
 struct AppProjectConfig {
+    bool restoreInputPaths = true;
     std::string leftCalibrationDirectory;
     std::string rightCalibrationDirectory;
     std::string leftReconstructionDirectory;
@@ -166,6 +177,7 @@ struct AppProjectConfig {
     std::string outputDirectory = "output";
     CalibrationInput calibrationInput;
     LaserExtractionConfig laserConfig;
+    ImageRange reconstructionImageRange;
     double matchDistanceThreshold = 0.5;
     AcquisitionParameterConfig acquisitionParameters;
 };

@@ -48,6 +48,7 @@ class ImageViewWidget;
 class LogPanel;
 class PointCloudViewWidget;
 class SerialCommandPackWidget;
+class ConfigAutoSave;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -145,6 +146,7 @@ private:
     // 生成一次新的默认标定结果文件路径。
     QString defaultCalibrationFilePath() const;
 
+    ConfigAutoSave* configAutoSave_ = nullptr;
     AppConfigService configService_;
     AcquisitionService acquisitionService_;
     CalibrationCaptureSessionService calibrationCaptureSessionService_;
