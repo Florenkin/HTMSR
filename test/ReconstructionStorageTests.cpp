@@ -1,10 +1,14 @@
 #include "app/services/ReconstructionCaptureSessionService.h"
+#include "app/services/LaserExtractionStorage.h"
 #include "app/services/ReconstructionStorage.h"
 #include "app/ui/AcquisitionPanel.h"
+#include "app/ui/CaptureReviewWidget.h"
+#include "app/ui/MainWindowViewModel.h"
 #include "core/PointCloudService.h"
 #include "core/ReconstructionService.h"
 
 #include <QDir>
+#include <QCheckBox>
 #include <QFile>
 #include <QFileInfo>
 #include <QLineEdit>
@@ -37,6 +41,18 @@ ReconstructionResult sampleResult()
     return result;
 }
 
+cv::Mat readImage(const std::string& path)
+{
+    QFile file(QString::fromStdString(path));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QByteArray bytes = file.readAll();
+    const cv::Mat encoded(1, bytes.size(), CV_8UC1,
+        const_cast<char*>(bytes.constData()));
+    return cv::imdecode(encoded, cv::IMREAD_COLOR);
+}
+
 void verifyCloud(const ReconstructionResult& result)
 {
     PointCloudService service;
@@ -50,17 +66,116 @@ void verifyCloud(const ReconstructionResult& result)
     }
 }
 
+void verifyPcdCompatibility(const QString& workDirectory)
+{
+    const QString asciiPath = QDir(workDirectory).filePath("external_ascii.pcd");
+    QFile ascii(asciiPath);
+    const QByteArray asciiContents =
+        "# externally generated PCD with reordered fields\n"
+        "VERSION 0.7\n"
+        "FIELDS intensity z x y\n"
+        "SIZE 4 8 8 8\n"
+        "TYPE U F F F\n"
+        "COUNT 1 1 1 1\n"
+        "WIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA ascii\n"
+        "7 3.75 1.25 2.5\n"
+        "9 6 -4 5\n";
+    require(ascii.open(QIODevice::WriteOnly) && ascii.write(asciiContents) == asciiContents.size(),
+        "ASCII PCD fixture must be writable");
+    ascii.close();
+
+    const auto loaded = PointCloudService{}.load(asciiPath.toStdString());
+    require(loaded.size() == 2 && (loaded[0] - Eigen::Vector3d(1.25, 2.5, 3.75)).norm() < 1e-9 &&
+        (loaded[1] - Eigen::Vector3d(-4, 5, 6)).norm() < 1e-9,
+        "Native PCD reader must support ASCII files, extra fields and reordered XYZ columns");
+
+    const QString unsupportedPath = QDir(workDirectory).filePath("compressed.pcd");
+    QFile unsupported(unsupportedPath);
+    const QByteArray unsupportedContents =
+        "VERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\n"
+        "WIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA binary_compressed\n";
+    require(unsupported.open(QIODevice::WriteOnly) &&
+        unsupported.write(unsupportedContents) == unsupportedContents.size(), "Unsupported PCD fixture must be writable");
+    unsupported.close();
+    bool rejected = false;
+    try {
+        (void)PointCloudService{}.load(unsupportedPath.toStdString());
+    } catch (const std::exception&) {
+        rejected = true;
+    }
+    require(rejected, "Unsupported compressed PCD must report a clear loading failure");
+}
+
+void verifyLaserExtractionStorage(const QString& workDirectory)
+{
+    const QStringList tabTitles = mainWindowCentralTabTitles();
+    require(tabTitles.size() == 5 && tabTitles.at(0) == QString::fromUtf8("双目") &&
+            tabTitles.at(1) == QString::fromUtf8("点云") && tabTitles.at(2) == QString::fromUtf8("采集") &&
+            tabTitles.at(3) == QString::fromUtf8("激光线") && tabTitles.at(4) == QString::fromUtf8("命令"),
+        "Laser extraction tab must appear between capture and commands");
+
+    const QString root = QDir(workDirectory).filePath(QString::fromUtf8("激光线输出"));
+    const auto fixedTime = QDateTime::fromString("20260925_203000_123", "yyyyMMdd_HHmmss_zzz");
+    cv::Mat left(24, 32, CV_8UC3, cv::Scalar(20, 30, 40));
+    cv::Mat right(24, 32, CV_8UC3, cv::Scalar(50, 60, 70));
+    left.at<cv::Vec3b>(12, 8) = cv::Vec3b(0, 0, 255);
+    right.at<cv::Vec3b>(12, 9) = cv::Vec3b(0, 0, 255);
+
+    LaserExtractionStorage first(root.toStdString(), fixedTime);
+    require(first.isReady() && first.savePair(0, left, right),
+        "Laser extraction storage must create a Unicode session and save a complete pair");
+    const auto firstResult = first.result();
+    require(QFileInfo(QString::fromStdString(firstResult.sessionDirectory)).fileName() == "20260925_203000_123" &&
+        firstResult.leftImagePaths.size() == 1 && firstResult.rightImagePaths.size() == 1,
+        "Laser extraction results must expose one timestamped left/right pair");
+    const cv::Mat savedLeft = readImage(firstResult.leftImagePaths.front());
+    require(!savedLeft.empty() && savedLeft.size() == left.size() &&
+        savedLeft.at<cv::Vec3b>(12, 8) == cv::Vec3b(0, 0, 255),
+        "Lossless PNG saving must preserve the red centerline overlay");
+
+    LaserExtractionStorage second(root.toStdString(), fixedTime);
+    require(second.isReady() && second.result().sessionDirectory != firstResult.sessionDirectory,
+        "Consecutive laser extraction sessions must not overwrite historical images");
+    require(!second.savePair(1, left, {}) && second.result().failedPairCount == 1 &&
+        second.result().leftImagePaths.empty() && second.result().rightImagePaths.empty() &&
+        !QFileInfo(QDir(QString::fromStdString(second.result().sessionDirectory))
+            .filePath("left/frame_000002.png")).exists(),
+        "An incomplete image pair must be removed and reported without exposing a partial result");
+
+    const QString blockedPath = QDir(workDirectory).filePath("blocked_laser_output");
+    QFile blocked(blockedPath);
+    require(blocked.open(QIODevice::WriteOnly), "Blocked laser output fixture must be writable");
+    blocked.close();
+    LaserExtractionStorage unavailable(blockedPath.toStdString(), fixedTime);
+    require(!unavailable.isReady() && unavailable.result().failedPairCount > 0,
+        "An unavailable laser output directory must be reported as a non-fatal storage failure");
+
+    CaptureReviewWidget viewer(CaptureReviewWidget::Mode::LaserExtractionReadOnly);
+    viewer.setImagePairs(firstResult.sessionDirectory, firstResult.leftImagePaths, firstResult.rightImagePaths);
+    require(viewer.captureResult().capturedFrameCount == 1,
+        "Read-only laser extraction viewer must load complete pairs after reconstruction");
+    for (auto* button : viewer.findChildren<QPushButton*>()) {
+        require(button->text() != QString::fromUtf8("删除"),
+            "Read-only laser extraction viewer must not expose deletion actions");
+    }
+}
+
 void verifyDirectoryWorkflow(const QString& workDirectory, const AcquisitionSessionResult& captured)
 {
     AcquisitionPanel panel;
     auto* leftEdit = panel.findChild<QLineEdit*>("leftReconstructionDirectory");
     auto* rightEdit = panel.findChild<QLineEdit*>("rightReconstructionDirectory");
+    auto* laserEdit = panel.findChild<QLineEdit*>("laserExtractionDirectory");
+    auto* saveLaserImages = panel.findChild<QCheckBox*>("saveLaserExtractionImages");
     auto* reconstructButton = panel.findChild<QPushButton*>("reconstructFrames");
     auto* captureButton = panel.findChild<QPushButton*>("startReconstructionCapture");
     require(captureButton && captureButton->text() == QString::fromUtf8("采集") &&
         reconstructButton && reconstructButton->text() == QString::fromUtf8("重建"), "Reconstruction actions must use the requested short titles");
-    require(leftEdit && rightEdit && reconstructButton && leftEdit->text().isEmpty() && rightEdit->text().isEmpty() &&
+    require(leftEdit && rightEdit && laserEdit && saveLaserImages && reconstructButton &&
+        leftEdit->text().isEmpty() && rightEdit->text().isEmpty() &&
         !reconstructButton->isEnabled(), "Reconstruction must initially have two empty directories and require both selections");
+    require(laserEdit->text() == "output/LaserExtraction" && !saveLaserImages->isChecked(),
+        "Laser extraction images must default to output/LaserExtraction and remain disabled");
 
     auto oldProject = panel.projectConfig();
     oldProject.restoreInputPaths = false;
@@ -70,6 +185,8 @@ void verifyDirectoryWorkflow(const QString& workDirectory, const AcquisitionSess
     panel.setProjectConfig(oldProject);
     require(leftEdit->text().isEmpty() && rightEdit->text().isEmpty() && panel.reconstructionInput({}).leftDirectory.empty() &&
         panel.reconstructionInput({}).rightDirectory.empty(), "Disabling path restoration must leave reconstruction directories empty");
+    require(laserEdit->text() == "output/LaserExtraction",
+        "Disabling input path restoration must not clear the laser extraction output directory");
 
     panel.setReconstructionDirectories(captured.leftDirectory, captured.rightDirectory);
     require(leftEdit->text() == QString::fromStdString(captured.leftDirectory) &&
@@ -115,9 +232,23 @@ void verifyDirectoryWorkflow(const QString& workDirectory, const AcquisitionSess
     const auto input = panel.reconstructionInput(calibration);
     require(input.leftDirectory == left.toStdString() && input.rightDirectory == right.toStdString(),
         "Offline inputs must use the currently selected directory, not the earlier capture");
-    auto reconstructed = ReconstructionService{}.reconstruct(input);
+    const QString laserRoot = QDir(workDirectory).filePath(QString::fromUtf8("回调激光线"));
+    LaserExtractionStorage laserStorage(laserRoot.toStdString(),
+        QDateTime::fromString("20260925_210000_001", "yyyyMMdd_HHmmss_zzz"));
+    auto reconstructed = ReconstructionService{}.reconstruct(input, {},
+        [&laserStorage](int frameIndex, const cv::Mat& leftPreview, const cv::Mat& rightPreview) {
+            laserStorage.savePair(frameIndex, leftPreview, rightPreview);
+        });
     require(reconstructed.success && reconstructed.frames.size() == 2 && !reconstructed.mergedPoints.empty(),
         "Selected offline frames must reconstruct actual points with the production core service");
+    require(laserStorage.result().leftImagePaths.size() == 2 &&
+        laserStorage.result().rightImagePaths.size() == 2,
+        "The reconstruction preview callback must save every processable frame as a complete pair");
+    const cv::Mat overlay = readImage(laserStorage.result().leftImagePaths.front());
+    cv::Mat redMask;
+    cv::inRange(overlay, cv::Scalar(0, 0, 250), cv::Scalar(5, 5, 255), redMask);
+    require(cv::countNonZero(redMask) > 0,
+        "Saved reconstruction previews must contain red centerline markers over the source image");
     for (const auto& frame : reconstructed.frames) {
         require(QFileInfo(QString::fromStdString(frame.leftImagePath)).absolutePath() == left &&
             QFileInfo(QString::fromStdString(frame.rightImagePath)).absolutePath() == right,
@@ -125,6 +256,18 @@ void verifyDirectoryWorkflow(const QString& workDirectory, const AcquisitionSess
     }
     ReconstructionStorage::savePointClouds(workDirectory.toStdString(), reconstructed);
     verifyCloud(reconstructed);
+
+    auto emptyLineInput = input;
+    emptyLineInput.laserConfig.grayThreshold = 255;
+    LaserExtractionStorage emptyLineStorage(laserRoot.toStdString(),
+        QDateTime::fromString("20260925_210001_001", "yyyyMMdd_HHmmss_zzz"));
+    const auto emptyLineResult = ReconstructionService{}.reconstruct(emptyLineInput, {},
+        [&emptyLineStorage](int frameIndex, const cv::Mat& leftPreview, const cv::Mat& rightPreview) {
+            emptyLineStorage.savePair(frameIndex, leftPreview, rightPreview);
+        });
+    require(!emptyLineResult.success && emptyLineStorage.result().leftImagePaths.size() == 2 &&
+        emptyLineStorage.result().rightImagePaths.size() == 2,
+        "Frames with empty extracted lines must still retain diagnostic preview pairs");
 
     panel.setBusy(true);
     require(!reconstructButton->isEnabled() && !leftEdit->isEnabled() && !rightEdit->isEnabled() &&
@@ -148,6 +291,8 @@ void runReconstructionStorageTests()
     QTemporaryDir work;
     require(work.isValid(), "Reconstruction saving tests need an isolated directory");
     const auto root = work.path().toStdString();
+    verifyPcdCompatibility(work.path());
+    verifyLaserExtractionStorage(work.path());
     const auto fixedTime = QDateTime::fromString("20260917_173001_123", "yyyyMMdd_HHmmss_zzz");
     const QString captureRoot = QDir(work.path()).filePath("reconstruction/capture");
     const QString resultRoot = QDir(work.path()).filePath("reconstruction/result");

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/Cancellation.h"
 
 #include "app/acquisition/AcquisitionTypes.h"
 
@@ -25,6 +26,7 @@ struct HardwareStereoFrame {
 };
 
 struct HardwareCaptureOptions {
+    CancellationToken cancellation;
     int expectedFrameCount = 0;
     int frameTimeoutMs = 3000;
     int pollTimeoutMs = 100;

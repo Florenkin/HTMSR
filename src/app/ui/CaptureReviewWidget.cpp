@@ -87,9 +87,14 @@ QLabel* createThumbnailLabel(const QString& title, const QString& imagePath, std
 
 } // namespace
 
-CaptureReviewWidget::CaptureReviewWidget(QWidget* parent)
+CaptureReviewWidget::CaptureReviewWidget(Mode mode, QWidget* parent)
     : QWidget(parent)
 {
+    allowDeletion_ = mode == Mode::CaptureEditable;
+    previewTitle_ = allowDeletion_ ? QString::fromUtf8("采集预览栏") : QString::fromUtf8("激光线预览栏");
+    detailTitle_ = allowDeletion_ ? QString::fromUtf8("采集详情图") : QString::fromUtf8("激光线详情图");
+    emptyText_ = allowDeletion_ ? QString::fromUtf8("暂无采集图像") : QString::fromUtf8("本次未启用激光线图片保存");
+
     auto* rootLayout = new QHBoxLayout(this);
     rootLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -107,7 +112,7 @@ CaptureReviewWidget::CaptureReviewWidget(QWidget* parent)
     previewPageLayout->setContentsMargins(8, 8, 8, 8);
     previewPageLayout->setSpacing(6);
 
-    auto* previewTitleLabel = new QLabel(QString::fromUtf8("采集预览栏"));
+    auto* previewTitleLabel = new QLabel(previewTitle_);
 
     previewScrollArea_ = new QScrollArea;
     previewScrollArea_->setWidget(previewContainer_);
@@ -125,7 +130,7 @@ CaptureReviewWidget::CaptureReviewWidget(QWidget* parent)
     detailLayout->setSpacing(6);
 
     auto* headerLayout = new QHBoxLayout;
-    detailTitleLabel_ = new QLabel(QString::fromUtf8("采集详情图"));
+    detailTitleLabel_ = new QLabel(detailTitle_);
     detailTitleLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     switchButton_ = new QPushButton(QString::fromUtf8("切换"));
     switchButton_->setEnabled(false);
@@ -157,6 +162,30 @@ void CaptureReviewWidget::setCaptureResult(const AcquisitionSessionResult& resul
     updateDetail();
 }
 
+void CaptureReviewWidget::setImagePairs(const std::string& sessionDirectory,
+    const std::vector<std::string>& leftImagePaths,
+    const std::vector<std::string>& rightImagePaths)
+{
+    if (!allowDeletion_) {
+        emptyText_ = QString::fromUtf8("本次没有可显示的激光线图片");
+    }
+    AcquisitionSessionResult result;
+    result.sessionDirectory = sessionDirectory;
+    result.leftImagePaths = leftImagePaths;
+    result.rightImagePaths = rightImagePaths;
+    result.capturedFrameCount = static_cast<int>(std::min(leftImagePaths.size(), rightImagePaths.size()));
+    result.success = result.capturedFrameCount > 0;
+    setCaptureResult(result);
+}
+
+void CaptureReviewWidget::clearImages()
+{
+    if (!allowDeletion_) {
+        emptyText_ = QString::fromUtf8("本次未启用激光线图片保存");
+    }
+    setCaptureResult({});
+}
+
 const AcquisitionSessionResult& CaptureReviewWidget::captureResult() const
 {
     return result_;
@@ -179,7 +208,7 @@ void CaptureReviewWidget::rebuildPreviewList()
     }
 
     if (frameCount() <= 0) {
-        auto* emptyLabel = new QLabel(QString::fromUtf8("暂无采集图像"));
+        auto* emptyLabel = new QLabel(emptyText_);
         emptyLabel->setAlignment(Qt::AlignCenter);
         emptyLabel->setMinimumHeight(120);
         emptyLabel->setStyleSheet("QLabel { color: #777777; }");
@@ -217,22 +246,22 @@ void CaptureReviewWidget::addPreviewRow(int frameIndex)
         selectFrame(frameIndex, false);
     });
 
-    auto* buttonColumn = new QWidget;
-    auto* buttonLayout = new QVBoxLayout(buttonColumn);
-    buttonLayout->setContentsMargins(0, 0, 0, 0);
-    buttonLayout->setSpacing(6);
-    auto* deleteButton = new QPushButton(QString::fromUtf8("删除"));
-    buttonLayout->addWidget(deleteButton);
-    buttonLayout->addStretch(1);
-
     rowLayout->addWidget(frameLabel);
     rowLayout->addWidget(leftLabel);
     rowLayout->addWidget(rightLabel);
-    rowLayout->addWidget(buttonColumn);
-
-    connect(deleteButton, &QPushButton::clicked, this, [this, frameIndex]() {
-        deleteFrame(frameIndex);
-    });
+    if (allowDeletion_) {
+        auto* buttonColumn = new QWidget;
+        auto* buttonLayout = new QVBoxLayout(buttonColumn);
+        buttonLayout->setContentsMargins(0, 0, 0, 0);
+        buttonLayout->setSpacing(6);
+        auto* deleteButton = new QPushButton(QString::fromUtf8("删除"));
+        buttonLayout->addWidget(deleteButton);
+        buttonLayout->addStretch(1);
+        rowLayout->addWidget(buttonColumn);
+        connect(deleteButton, &QPushButton::clicked, this, [this, frameIndex]() {
+            deleteFrame(frameIndex);
+        });
+    }
 
     previewRows_.append(row);
     thumbnailLabels_.append(leftLabel);
@@ -286,7 +315,7 @@ void CaptureReviewWidget::switchDetailSide()
 
 void CaptureReviewWidget::deleteFrame(int frameIndex)
 {
-    if (frameIndex < 0 || frameIndex >= frameCount()) {
+    if (!allowDeletion_ || frameIndex < 0 || frameIndex >= frameCount()) {
         return;
     }
 
@@ -408,14 +437,15 @@ void CaptureReviewWidget::refreshThumbnailLabel(QLabel* label)
 void CaptureReviewWidget::updateDetail()
 {
     if (selectedFrameIndex_ < 0 || selectedFrameIndex_ >= frameCount()) {
-        detailTitleLabel_->setText(QString::fromUtf8("采集详情图"));
+        detailTitleLabel_->setText(detailTitle_);
         switchButton_->setEnabled(false);
         detailImageView_->clear();
         return;
     }
 
     const QString sideText = showingLeft_ ? QString::fromUtf8("左图") : QString::fromUtf8("右图");
-    detailTitleLabel_->setText(QString::fromUtf8("采集详情图 - 第 %1 帧 %2").arg(selectedFrameIndex_ + 1).arg(sideText));
+    detailTitleLabel_->setText(QString::fromUtf8("%1 - 第 %2 帧 %3")
+        .arg(detailTitle_).arg(selectedFrameIndex_ + 1).arg(sideText));
     switchButton_->setEnabled(true);
     detailImageView_->setImageFile(imagePathForFrame(selectedFrameIndex_, showingLeft_));
 }

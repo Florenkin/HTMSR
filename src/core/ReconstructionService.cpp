@@ -112,8 +112,10 @@ bool shouldLogFrameDiagnostics(int frameIndex, int frameCount, const FrameRecons
 
 } // namespace
 
-ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInput& input) const
+ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInput& input, CancellationToken cancellation,
+    const FramePreviewCallback& previewCallback) const
 {
+    cancellation.check();
     if (!input.calibration.isValid()) {
         throw std::runtime_error("Reconstruction requires a valid calibration result.");
     }
@@ -136,6 +138,7 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
 
     // 对每一对左右图像独立执行一次三维重建，点云直接追加到总结果，避免大批量帧时重复占用内存。
     for (int i = 0; i < pairCount; ++i) {
+        cancellation.check();
         try {
             cv::Mat left = cv::imread(leftPaths[i], cv::IMREAD_COLOR);
             cv::Mat right = cv::imread(rightPaths[i], cv::IMREAD_COLOR);
@@ -155,7 +158,9 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
                 input.matchDistanceThreshold,
                 frame.leftLinePreview,
                 frame.rightLinePreview,
-                frame.diagnostics);
+                frame.diagnostics,
+                i,
+                previewCallback);
 
             if (shouldLogFrameDiagnostics(i + 1, pairCount, frame)) {
                 Logger::instance().debug("Reconstruction", formatFrameDiagnostics(i + 1, frame));
@@ -182,6 +187,7 @@ ReconstructionResult ReconstructionService::reconstruct(const ReconstructionInpu
         }
     }
 
+    cancellation.check();
     result.success = !result.mergedPoints.empty();
     result.message = result.success
         ? "Batch reconstruction finished. Total points=" + std::to_string(result.mergedPoints.size())
@@ -198,7 +204,9 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
     double matchDistanceThreshold,
     cv::Mat& leftPreview,
     cv::Mat& rightPreview,
-    FrameReconstructionDiagnostics& diagnostics) const
+    FrameReconstructionDiagnostics& diagnostics,
+    int frameIndex,
+    const FramePreviewCallback& previewCallback) const
 {
     diagnostics = FrameReconstructionDiagnostics{};
 
@@ -208,6 +216,19 @@ std::vector<Eigen::Vector3d> ReconstructionService::reconstructFrame(
     const auto rightLine = extractor.extract(rightImage, laserConfig.rightRoi, laserConfig);
     leftPreview = leftLine.preview;
     rightPreview = rightLine.preview;
+
+    // 提线一完成就交给应用层保存；后续匹配为空或发生异常时仍保留诊断图。
+    if (previewCallback) {
+        try {
+            previewCallback(frameIndex, leftPreview, rightPreview);
+        } catch (const std::exception& ex) {
+            Logger::instance().warning("Reconstruction",
+                "Laser preview callback failed for frame " + std::to_string(frameIndex + 1) + ": " + ex.what());
+        } catch (...) {
+            Logger::instance().warning("Reconstruction",
+                "Laser preview callback failed for frame " + std::to_string(frameIndex + 1) + ".");
+        }
+    }
 
     const cv::Rect leftSafeRoi = laserConfig.leftRoi & cv::Rect(0, 0, leftImage.cols, leftImage.rows);
     const cv::Rect rightSafeRoi = laserConfig.rightRoi & cv::Rect(0, 0, rightImage.cols, rightImage.rows);

@@ -2,6 +2,7 @@
 #include "app/ui/AcquisitionPanel.h"
 
 #include <QCoreApplication>
+#include <QCheckBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QLineEdit>
@@ -67,6 +68,8 @@ void verifyRestoredSettings(const QString& settingsRoot)
     require(project.calibrationInput.boardSize == cv::Size(9, 6) &&
         project.calibrationInput.squareSize == cv::Size2d(25.0, 25.0),
         "Saved calibration values equal to old defaults must not be rewritten");
+    require(project.laserExtractionDirectory == "custom/激光线输出" && project.saveLaserExtractionImages,
+        "Laser extraction output directory and enabled state must survive a restart");
     require(project.laserConfig.leftRoi == cv::Rect(350, 0, 1900, 2048) &&
         project.laserConfig.rightRoi == cv::Rect(900, 0, 1500, 2048) &&
         project.laserConfig.grayThreshold == 205,
@@ -91,6 +94,9 @@ void runAppConfigPersistenceTests()
         "First launch without saved settings must retain the defaults");
     require(firstLaunch.leftReconstructionDirectory.empty() && firstLaunch.rightReconstructionDirectory.empty(),
         "Legacy saved reconstruction paths must not populate the new empty directory");
+    require(firstLaunch.laserExtractionDirectory == "output/LaserExtraction" &&
+        !firstLaunch.saveLaserExtractionImages,
+        "Laser extraction images must default to the project output folder and remain disabled");
 
     auto changed = firstLaunch;
     changed.acquisitionParameters.stepAngleDeg = 0.2;
@@ -104,6 +110,8 @@ void runAppConfigPersistenceTests()
     changed.laserConfig.leftRoi = cv::Rect(350, 0, 1900, 2048);
     changed.laserConfig.rightRoi = cv::Rect(900, 0, 1500, 2048);
     changed.laserConfig.grayThreshold = 205;
+    changed.laserExtractionDirectory = "custom/激光线输出";
+    changed.saveLaserExtractionImages = true;
     AcquisitionPanel panel;
     panel.setProjectConfig(changed);
     auto* step = panel.findChild<QDoubleSpinBox*>("galvoStepAngle");
@@ -112,6 +120,9 @@ void runAppConfigPersistenceTests()
     panel.commitPendingEdits();
     require(std::abs(panel.projectConfig().acquisitionParameters.stepAngleDeg - 0.05) < 0.000001,
         "Closing while the angle is still being edited must save the last typed value");
+    require(panel.findChild<QLineEdit*>("laserExtractionDirectory") != nullptr &&
+        panel.findChild<QCheckBox*>("saveLaserExtractionImages") != nullptr,
+        "Laser extraction output controls must be available in the reconstruction panel");
     service.save(panel.projectConfig());
     {
         QSettings cleaned(QSettings::defaultFormat(), QSettings::UserScope, "HTMSR", "HTMSR");

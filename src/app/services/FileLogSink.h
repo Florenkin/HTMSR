@@ -13,7 +13,7 @@ namespace htmsr::app {
 // 每次运行独立写入 UTF-8 日志，启动时仅清理本软件超过 24 小时的日志文件。
 class FileLogSink final {
 public:
-    explicit FileLogSink(const QString& directory = QStringLiteral("C:/PROJECT/HTMSR/log"),
+    explicit FileLogSink(const QString& directory,
         const QDateTime& startTime = QDateTime::currentDateTime());
     ~FileLogSink();
     FileLogSink(const FileLogSink&) = delete;

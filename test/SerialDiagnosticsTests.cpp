@@ -22,6 +22,7 @@ void verifyRestoredSettings(const QString& settingsRoot);
 void runCalibrationWorkflowTests();
 void runReconstructionStorageTests();
 void runResultExportTests();
+void runCancellationTests();
 
 namespace {
 void require(bool condition, const char* message)
@@ -133,6 +134,7 @@ int main(int argc, char** argv)
         runCalibrationWorkflowTests();
         runReconstructionStorageTests();
         runResultExportTests();
+        runCancellationTests();
         return 0;
     } catch (const std::exception& ex) {
         std::cerr << "FAIL: " << ex.what() << '\n';

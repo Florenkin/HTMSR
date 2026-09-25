@@ -6,6 +6,7 @@
 #include "QtTestApplication.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -80,6 +81,17 @@ int main(int argc, char** argv)
             legacy.setValue("acquisition/speedMs", 42);
             legacy.sync();
         }
+        const auto portableExe = QDir(root.path()).filePath("portable");
+        QDir().mkpath(portableExe + "/config");
+        require(ConfigFiles::selectDirectory(portableExe, "development") == portableExe + "/config",
+            "Adjacent config must take precedence over compiled development path");
+        require(ConfigFiles::selectDirectory(root.path() + "/missing", root.path()) == root.path(),
+            "Development config must remain the fallback");
+        QDir().mkpath(root.path() + "/defaults");
+        write(root.path() + "/defaults/example.ini", "[test]\nvalue=default\n");
+        require(read(ConfigFiles::path("example.ini")).contains("default"), "Missing local file must copy its template");
+        write(root.path() + "/example.ini", "manual");
+        require(read(ConfigFiles::path("example.ini")) == "manual", "Templates must never overwrite local edits");
         AppConfigService service;
         auto project = service.load();
         require(project.calibrationInput.boardSize.width == 12 && project.acquisitionParameters.speedMs == 42,
@@ -103,6 +115,8 @@ int main(int argc, char** argv)
         project.reconstructionImageRange = {2, 4};
         project.leftReconstructionDirectory = "manual/left";
         project.rightReconstructionDirectory = "manual/right";
+        project.laserExtractionDirectory = "manual/激光线";
+        project.saveLaserExtractionImages = true;
         AcquisitionPanel panel;
         int changes = 0;
         QObject::connect(&panel, &AcquisitionPanel::projectConfigChanged, [&]() { ++changes; });
@@ -115,6 +129,11 @@ int main(int argc, char** argv)
         require(panel.calibrationInput().imageRange.begin == 1 && panel.reconstructionInput({}).imageRange.end == 4 &&
             !panel.reconstructionInput({}).laserConfig.filterStegerPoints,
             "File-only reconstruction and calibration options must reach the algorithms");
+        auto* laserDirectory = panel.findChild<QLineEdit*>("laserExtractionDirectory");
+        auto* saveLaserImages = panel.findChild<QCheckBox*>("saveLaserExtractionImages");
+        require(laserDirectory && laserDirectory->text() == QString::fromUtf8("manual/激光线") &&
+            saveLaserImages && saveLaserImages->isChecked(),
+            "Laser extraction directory and save option must restore into the reconstruction panel");
         int saves = 0;
         ConfigAutoSave autosave([&]() { ++saves; require(service.save(panel.projectConfig()), "Automatic save must succeed"); }, nullptr, 20);
         QObject::connect(&panel, &AcquisitionPanel::projectConfigChanged, &autosave, [&]() { autosave.schedule(); });
@@ -132,6 +151,9 @@ int main(int argc, char** argv)
         require(preserved.contains(QString::fromUtf8("我的中文说明").toUtf8()) && preserved.contains("customValue="),
             "Saving must preserve custom comments and unknown parameters");
         require(service.load().leftReconstructionDirectory == "manual/left", "Input paths must survive restart when enabled");
+        require(service.load().laserExtractionDirectory == "manual/激光线" &&
+            service.load().saveLaserExtractionImages,
+            "Laser extraction output settings must survive restart");
         step->findChild<QLineEdit*>()->setText("0.05");
         panel.commitPendingEdits();
         autosave.flush();
@@ -140,6 +162,8 @@ int main(int argc, char** argv)
         project.restoreInputPaths = false;
         require(service.save(project) && service.load().leftReconstructionDirectory.empty(),
             "The startup path restoration switch must be respected");
+        require(service.load().laserExtractionDirectory == "manual/激光线",
+            "Laser extraction output directory must not be cleared by input path restoration settings");
 
         write(ConfigFiles::path("environment.ini"), "[runtime]\nqtPluginDirectory=plugins\nextraDllDirectories=libs\n");
         require(ConfigFiles::environmentPath("runtime/qtPluginDirectory") == QDir(root.path()).filePath("plugins"),

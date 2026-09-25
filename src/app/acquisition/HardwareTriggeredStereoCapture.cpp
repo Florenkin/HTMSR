@@ -50,6 +50,7 @@ HardwareCaptureReport HardwareTriggeredStereoCapture::capture(
         changed.notify_all();
     };
     const auto isStopped = [&]() {
+        if (options.cancellation.requested()) fail("操作已取消，采集未完整完成。");
         std::lock_guard<std::mutex> lock(mutex);
         return stopped;
     };
@@ -205,6 +206,7 @@ HardwareCaptureReport HardwareTriggeredStereoCapture::capture(
         }
         // 接收和保存三路线程已就绪，最后才允许振镜产生扫描脉冲。
         const auto scanStart = std::chrono::steady_clock::now();
+        options.cancellation.check();
         startScan();
         report.scanStartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scanStart).count();
     } catch (const std::exception& ex) {

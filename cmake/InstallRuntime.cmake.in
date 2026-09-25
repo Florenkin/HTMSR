@@ -1,0 +1,128 @@
+if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+endif()
+set(package_search_dirs "@HTMSR_PACKAGE_SEARCH_DIRS@")
+set(CMAKE_GET_RUNTIME_DEPENDENCIES_PLATFORM "windows+pe")
+set(CMAKE_GET_RUNTIME_DEPENDENCIES_TOOL "dumpbin")
+set(CMAKE_GET_RUNTIME_DEPENDENCIES_COMMAND "@HTMSR_PACKAGE_DUMPBIN@")
+# 清除上一次发布留下的运行库和 Qt 插件，防止更换依赖后混入旧版本。
+# 用户在 config 中保存的参数不在清理范围内。
+file(GLOB old_runtime_files
+    "${CMAKE_INSTALL_PREFIX}/*.dll"
+    "${CMAKE_INSTALL_PREFIX}/*.cti"
+    "${CMAKE_INSTALL_PREFIX}/*.manifest")
+if(old_runtime_files)
+    file(REMOVE ${old_runtime_files})
+endif()
+file(REMOVE_RECURSE
+    "${CMAKE_INSTALL_PREFIX}/platforms"
+    "${CMAKE_INSTALL_PREFIX}/styles"
+    "${CMAKE_INSTALL_PREFIX}/imageformats")
+file(REMOVE "${CMAKE_INSTALL_PREFIX}/runtime-dependencies.txt")
+# 先形成唯一的运行库搜索目录，遵循程序实际加载时的优先级：
+# 当前构建已部署的版本优先，备用 SDK 仅补齐缺失的模块。
+# 每次使用新目录，避免上一次发布留下的 DLL 影响依赖检查。
+string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef stage_id)
+set(stage "@CMAKE_CURRENT_BINARY_DIR@/package-runtime-${stage_id}")
+file(MAKE_DIRECTORY "${stage}")
+file(COPY "@CMAKE_CURRENT_BINARY_DIR@/htmsr_app.exe" DESTINATION "${stage}")
+set(compiler_runtime "@CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS@")
+# 当前编译器的 CRT 必须优先于 Qt/设备 SDK 附带的旧版 CRT。
+foreach(source IN LISTS compiler_runtime)
+    file(COPY "${source}" DESTINATION "${stage}")
+endforeach()
+foreach(directory "@CMAKE_CURRENT_BINARY_DIR@" ${package_search_dirs})
+    file(GLOB candidates "${directory}/*.dll")
+    foreach(source IN LISTS candidates)
+        get_filename_component(name "${source}" NAME)
+        if(NOT EXISTS "${stage}/${name}")
+            file(CREATE_LINK "${source}" "${stage}/${name}" COPY_ON_ERROR)
+        endif()
+    endforeach()
+endforeach()
+set(package_exe "${stage}/htmsr_app.exe")
+set(package_libraries)
+set(package_plugins)
+foreach(plugin "platforms/qwindows.dll" "styles/qwindowsvistastyle.dll")
+    set(source "@HTMSR_QT_PLUGINS_DIR@/${plugin}")
+    if(EXISTS "${source}")
+        list(APPEND package_libraries "${source}")
+        get_filename_component(folder "${plugin}" DIRECTORY)
+        file(INSTALL "${source}" DESTINATION "${CMAKE_INSTALL_PREFIX}/${folder}")
+    elseif(plugin STREQUAL "platforms/qwindows.dll")
+        message(FATAL_ERROR "Missing required Qt Windows platform plugin: ${source}")
+    endif()
+endforeach()
+# Qt 在运行时加载图片插件，不能仅从 exe 的静态导入表发现。
+file(GLOB image_plugins "@HTMSR_QT_PLUGINS_DIR@/imageformats/*.dll")
+foreach(plugin IN LISTS image_plugins)
+    if(NOT plugin MATCHES "d\\.dll$")
+        list(APPEND package_libraries "${plugin}")
+        file(INSTALL "${plugin}" DESTINATION "${CMAKE_INSTALL_PREFIX}/imageformats")
+    endif()
+endforeach()
+if("@HTMSR_ENABLE_HIK_CAMERA@")
+    file(GLOB sdk_files "@HIK_MVS_RUNTIME_DIR@/*.dll" "@HIK_MVS_RUNTIME_DIR@/*.cti"
+        "@HIK_MVS_RUNTIME_DIR@/*.ini" "@HIK_MVS_RUNTIME_DIR@/*.manifest")
+    foreach(source IN LISTS sdk_files)
+        if(NOT source MATCHES "DebugCRT")
+            file(INSTALL "${source}" DESTINATION "${CMAKE_INSTALL_PREFIX}")
+        endif()
+    endforeach()
+endif()
+file(GET_RUNTIME_DEPENDENCIES
+    EXECUTABLES "${package_exe}"
+    LIBRARIES ${package_libraries}
+    DIRECTORIES "${stage}"
+    RESOLVED_DEPENDENCIES_VAR resolved
+    UNRESOLVED_DEPENDENCIES_VAR unresolved
+    CONFLICTING_DEPENDENCIES_PREFIX conflicts
+    PRE_EXCLUDE_REGEXES "^[Aa][Pp][Ii]-[Mm][Ss]-" "^[Ee][Xx][Tt]-[Mm][Ss]-"
+    POST_EXCLUDE_REGEXES ".*[/\\\\][Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\].*")
+if(unresolved)
+    message(FATAL_ERROR "Incomplete package: unresolved DLLs: ${unresolved}. Fix config/environment.ini dependencies.")
+endif()
+foreach(name IN LISTS conflicts_FILENAMES)
+    set(expected_hash "")
+    foreach(source IN LISTS conflicts_${name})
+        file(SHA256 "${source}" actual_hash)
+        if(expected_hash AND NOT expected_hash STREQUAL actual_hash)
+            message(FATAL_ERROR "Conflicting runtime versions for ${name}: ${conflicts_${name}}")
+        endif()
+        set(expected_hash "${actual_hash}")
+    endforeach()
+    list(GET conflicts_${name} 0 source)
+    list(APPEND resolved "${source}")
+endforeach()
+foreach(source IN LISTS resolved)
+    file(INSTALL "${source}" DESTINATION "${CMAKE_INSTALL_PREFIX}")
+endforeach()
+foreach(source IN LISTS compiler_runtime)
+    file(INSTALL "${source}" DESTINATION "${CMAKE_INSTALL_PREFIX}")
+endforeach()
+# 用户配置只在缺失时初始化；重新发布不覆盖已有参数。
+file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/config")
+file(GLOB defaults "@CMAKE_CURRENT_SOURCE_DIR@/config/defaults/*.ini" "@CMAKE_CURRENT_SOURCE_DIR@/config/defaults/*.json")
+foreach(source IN LISTS defaults)
+    get_filename_component(name "${source}" NAME)
+    if(NOT EXISTS "${CMAKE_INSTALL_PREFIX}/config/${name}")
+        file(COPY_FILE "${source}" "${CMAKE_INSTALL_PREFIX}/config/${name}")
+    endif()
+endforeach()
+set(runtime_manifest "SHA256  File\n")
+file(GLOB installed_modules "${CMAKE_INSTALL_PREFIX}/*.dll"
+    "${CMAKE_INSTALL_PREFIX}/platforms/*.dll" "${CMAKE_INSTALL_PREFIX}/styles/*.dll"
+    "${CMAKE_INSTALL_PREFIX}/imageformats/*.dll")
+foreach(source IN LISTS installed_modules)
+    file(SHA256 "${source}" digest)
+    file(RELATIVE_PATH name "${CMAKE_INSTALL_PREFIX}" "${source}")
+    string(APPEND runtime_manifest "${digest}  ${name}\n")
+endforeach()
+file(WRITE "${CMAKE_INSTALL_PREFIX}/runtime-dependencies.txt" "${runtime_manifest}")
+# 仅清理本次生成、直接位于构建目录内的暂存目录。
+file(REAL_PATH "@CMAKE_CURRENT_BINARY_DIR@" build_root)
+get_filename_component(stage_parent "${stage}" DIRECTORY)
+file(REAL_PATH "${stage_parent}" stage_parent)
+if(stage_parent STREQUAL build_root AND stage MATCHES "/package-runtime-[0-9a-f]+$")
+    file(REMOVE_RECURSE "${stage}")
+endif()

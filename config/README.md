@@ -1,13 +1,15 @@
 # HTMSR 参数配置
 
-软件默认读取 `C:\PROJECT\HTMSR\config`。配置使用 UTF-8 编码，各参数前有中文说明、单位或可选值。
+配置目录按优先级查找：环境变量 `HTMSR_CONFIG_DIR`、exe 相邻且已存在的 `config`、编译时源码目录的 `config`。配置使用 UTF-8 编码，各参数前有中文说明、单位或可选值。
+
+`defaults` 为提交到版本库的配置模板；本目录直接使用的 INI/JSON 是本机配置，已忽略版本管理。缺少文件时从模板初始化，已有文件不覆盖。首次克隆配置会生成 `environment.ini` 并提示填写依赖；发布包默认使用模板值，不复制开发机实际路径。要修改共享默认值，请维护模板。
 
 | 文件 | 内容 |
 | --- | --- |
 | `calibration.ini` | 棋盘格内角点数量、方格尺寸、标定图像索引范围 |
-| `reconstruction.ini` | 中心线算法、颜色、左右 ROI、阈值、条纹宽度、匹配、端点处理、重建图像范围 |
+| `reconstruction.ini` | 中心线算法、颜色、左右 ROI、阈值、条纹宽度、匹配、端点处理、重建图像范围、激光线图片保存开关 |
 | `acquisition.ini` | 曝光、触发、角度、速度、增益、取流超时、串口波特率、扫描时序、激光及电压 |
-| `paths.ini` | 输入目录、标定结果文件、输出目录、日志目录、启动路径恢复开关 |
+| `paths.ini` | 输入目录、标定结果文件、输出目录、激光线图片目录、日志目录、启动路径恢复开关 |
 | `environment.ini` | 编译依赖路径和开关、启动时使用的插件及动态运行库补充搜索路径 |
 | `command_packs.json` | 命令包名称及命令文本；JSON 以 `_说明` 字段提供中文注释 |
 
@@ -17,13 +19,13 @@
 
 手动编辑请先关闭软件，再修改对应文件并重新启动，避免软件仍打开时用界面数值覆盖手工修改。INI 格式为 `参数=值`，说明独占一行，以 `;` 或 `#` 开头；路径不加引号，推荐使用 `/`。数字使用小数点，布尔值使用 `true` / `false`。命令包内容中的 `\n` 表示换行。
 
-输入和输出目录的相对路径以 `config` 的父目录为基准。`paths.ini` 的日志路径及 `environment.ini` 的运行时相对路径以 `config` 为基准。`restoreInputPaths=true` 恢复上次输入目录和标定文件；改为 `false` 时启动输入路径为空，数值参数仍恢复。
+输入和输出目录的相对路径以 `config` 的父目录为基准。`paths.ini` 的日志路径及 `environment.ini` 的运行时相对路径以 `config` 为基准。`laserExtractionDirectory` 默认是 `output/LaserExtraction`，属于输出目录，不受 `restoreInputPaths` 影响；`saveLaserExtractionImages` 默认是 `false`。`restoreInputPaths=true` 恢复上次输入目录和标定文件；改为 `false` 时启动输入路径为空，数值参数仍恢复。
 
 `environment.ini` 的 `[runtime]` 在每次启动时读取。软件优先使用可执行程序目录中已部署的匹配 Qt 插件，再使用配置的备用插件目录。补充 DLL 搜索路径仅影响启动后的动态加载，程序启动前依赖的 DLL 仍需完整部署。
 
 `[build]` 由 CMake 读取，公共预设仅指定构建类型和输出目录；本文件中的依赖值优先于缓存和预设中的同名值。换电脑只需在本文件中修改本机依赖路径，无需创建、修改 `CMakeUserPresets.json`。构建相对路径以 `environment.ini` 所在目录为基准。
 
-`CMAKE_PREFIX_PATH` 通常留空：CMake 自动根据 Qt、OpenCV、PCL、VTK、Eigen 路径生成搜索目录，并扫描 PCL 的 `3rdParty` 下 Boost、Qhull 等配置目录；没有固定的 Boost 版本目录名。只有依赖另装在其他位置时，才在此项中补充搜索目录。构建配置改变时自动清除相关依赖查找缓存，不需要手动编辑 `CMakeCache.txt`。编译器或生成器发生变化时仍建议使用新的构建目录。
+`CMAKE_PREFIX_PATH` 通常留空：CMake 自动根据 Qt、OpenCV、VTK 和 Eigen 路径生成搜索目录。只有依赖另装在其他位置时，才在此项中补充搜索目录。构建配置改变时自动清除相关依赖查找缓存，不需要手动编辑 `CMakeCache.txt`。编译器或生成器发生变化时仍建议使用新的构建目录。
 
 改动编译依赖后，在配置为 x64 的 Visual Studio Developer PowerShell 中重新配置并构建：
 

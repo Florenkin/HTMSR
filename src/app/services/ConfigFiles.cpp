@@ -1,6 +1,10 @@
 #include "app/services/ConfigFiles.h"
 
+#include <QCoreApplication>
 #include <QDir>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -168,12 +172,33 @@ QString ConfigFiles::directory()
         qputenv("HTMSR_CONFIG_DIR", absolute.toUtf8());
         return QDir::cleanPath(absolute);
     }
-    return QDir::cleanPath(override.isEmpty() ? QStringLiteral(HTMSR_DEFAULT_CONFIG_DIR) : QFileInfo(override).absoluteFilePath());
+    if (!override.isEmpty()) return QDir::cleanPath(QFileInfo(override).absoluteFilePath());
+    QString executableDirectory;
+#ifdef Q_OS_WIN
+    wchar_t buffer[32768];
+    const auto length = GetModuleFileNameW(nullptr, buffer, 32768);
+    if (length > 0 && length < 32768)
+        executableDirectory = QFileInfo(QString::fromWCharArray(buffer, static_cast<int>(length))).absolutePath();
+#else
+    if (QCoreApplication::instance()) executableDirectory = QCoreApplication::applicationDirPath();
+#endif
+    return selectDirectory(executableDirectory, QStringLiteral(HTMSR_DEFAULT_CONFIG_DIR));
+}
+
+QString ConfigFiles::selectDirectory(const QString& executableDirectory, const QString& developmentDirectory)
+{
+    const auto portable = QDir(executableDirectory).filePath("config");
+    return QDir::cleanPath(!executableDirectory.isEmpty() && QDir(portable).exists()
+        ? portable : developmentDirectory);
 }
 
 QString ConfigFiles::path(const QString& relativePath)
 {
-    return QDir(directory()).filePath(relativePath);
+    const auto target = QDir(directory()).filePath(relativePath);
+    const auto defaults = QDir(directory()).filePath("defaults/" + relativePath);
+    // 只初始化缺失文件；QFile::copy 不覆盖已有手工配置。
+    if (!QFileInfo::exists(target) && QFileInfo(defaults).isFile()) QFile::copy(defaults, target);
+    return target;
 }
 
 QString ConfigFiles::resolvePath(const QString& value)

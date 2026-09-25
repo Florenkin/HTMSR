@@ -3,6 +3,7 @@
 #include "app/acquisition/AcquisitionTypes.h"
 
 #include <QList>
+#include <QString>
 #include <QWidget>
 
 class QLabel;
@@ -10,7 +11,6 @@ class QFrame;
 class QPixmap;
 class QPushButton;
 class QScrollArea;
-class QString;
 class QVBoxLayout;
 
 namespace htmsr::app {
@@ -21,9 +21,18 @@ class CaptureReviewWidget final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CaptureReviewWidget(QWidget* parent = nullptr);
+    enum class Mode {
+        CaptureEditable,
+        LaserExtractionReadOnly
+    };
+
+    explicit CaptureReviewWidget(Mode mode = Mode::CaptureEditable, QWidget* parent = nullptr);
 
     void setCaptureResult(const AcquisitionSessionResult& result);
+    void setImagePairs(const std::string& sessionDirectory,
+        const std::vector<std::string>& leftImagePaths,
+        const std::vector<std::string>& rightImagePaths);
+    void clearImages();
     const AcquisitionSessionResult& captureResult() const;
 
 signals:
@@ -52,6 +61,10 @@ private:
     QLabel* detailTitleLabel_ = nullptr;
     QPushButton* switchButton_ = nullptr;
     ZoomableImageView* detailImageView_ = nullptr;
+    QString previewTitle_;
+    QString detailTitle_;
+    QString emptyText_;
+    bool allowDeletion_ = true;
     int selectedFrameIndex_ = -1;
     bool showingLeft_ = true;
 };

@@ -200,6 +200,21 @@ int main()
         complete = run(frames(3, 0xFFFFFFFEu), frames(3, 20), 3);
         check(complete.success, "32-bit frame counter wrap was incorrectly rejected");
         std::cout << "PASS: extra trigger is rejected and 32-bit counter wrap is accepted\n";
+        {
+            HardwareCaptureOptions options;
+            options.expectedFrameCount = 10;
+            options.frameTimeoutMs = 60000;
+            options.pollTimeoutMs = 10;
+            auto token = options.cancellation;
+            std::thread stop([token]() { std::this_thread::sleep_for(std::chrono::milliseconds(30)); token.request(); });
+            const auto cancelled = HardwareTriggeredStereoCapture{}.capture(options,
+                [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); return CameraFrame{}; },
+                [](int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); return CameraFrame{}; },
+                [] {}, [](const HardwareStereoFrame&) {});
+            stop.join();
+            check(!cancelled.success && cancelled.savedPairs == 0, "Cancelled trigger wait must not report success");
+            std::cout << "PASS: cancellation wakes receivers and pair writer without waiting for frame timeout\n";
+        }
         return 0;
     } catch (const std::exception& ex) {
         std::cerr << "FAIL: " << ex.what() << '\n';

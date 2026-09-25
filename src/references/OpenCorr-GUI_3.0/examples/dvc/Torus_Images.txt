@@ -1,3 +1,0 @@
-The compressed package of images (about 103M) is available on opencorr.org:
-https://opencorr.org/Download/
-It can be unzipped using 7-Zip.

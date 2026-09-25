@@ -1,10 +1,10 @@
 #pragma once
+#include "core/Cancellation.h"
 
 #include "app/services/AcquisitionService.h"
 #include "app/services/AppConfigService.h"
 #include "app/services/CalibrationCaptureSessionService.h"
-#include "app/services/IntegratedCalibrationCaptureService.h"
-#include "app/services/IntegratedScanService.h"
+#include "app/services/LaserExtractionStorage.h"
 #include "app/services/QtLogSink.h"
 #include "app/services/ReconstructionCaptureSessionService.h"
 #include "core/CalibrationService.h"
@@ -42,6 +42,11 @@ struct GalvoMotionVerificationResult {
     QString portName;
 };
 
+struct ReconstructionTaskResult {
+    ReconstructionResult reconstruction;
+    LaserExtractionImageResult laserExtractionImages;
+};
+
 class AcquisitionPanel;
 class CaptureReviewWidget;
 class ImageViewWidget;
@@ -55,7 +60,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     /*
-        函数功能：构造主窗口，初始化菜单、工具栏、Dock 区域、中央视图、日志、配置和采集入口
+        函数功能：构造主窗口，初始化 Dock 区域、中央视图、日志、配置和采集入口
         输入：
             parent：Qt 父窗口
         输出：
@@ -76,12 +81,6 @@ private slots:
     void exportReconstruction();
     // 刷新在线采集设备列表。
     void refreshAcquisitionDevices();
-    // 执行在线采集保存任务。
-    void runAcquisition();
-    // 执行一键自动标定任务。
-    void runAutoCalibration();
-    // 执行一键扫描重建任务。
-    void runScanAndReconstruct();
     void captureCalibrationFrame();
     void calibrateCapturedFrames();
     void loadCalibrationFile(const QString& file);
@@ -98,12 +97,6 @@ private slots:
     void onCalibrationFinished();
     // 重建后台任务结束后的 UI 回调。
     void onReconstructionFinished();
-    // 在线采集后台任务结束后的 UI 回调。
-    void onAcquisitionFinished();
-    // 一键自动标定后台任务结束后的 UI 回调。
-    void onAutoCalibrationFinished();
-    // 一键扫描重建后台任务结束后的 UI 回调。
-    void onScanAndReconstructFinished();
     void onCalibrationFrameCaptured();
     void onReconstructionCaptureFinished();
     void onCaptureReviewResultChanged();
@@ -113,8 +106,6 @@ private:
     void buildDocks();
     // 构建中央点云/图像显示标签页。
     void buildCentralView();
-    // 保留流程刷新入口；当前界面不再显示独立资源面板。
-    void refreshProjectTree();
     void updateResultAvailability();
     // 更新任务忙碌状态和底部进度条。
     void setBusy(bool busy, const QString& text, bool keepLivePreview = false);
@@ -150,8 +141,6 @@ private:
     AppConfigService configService_;
     AcquisitionService acquisitionService_;
     CalibrationCaptureSessionService calibrationCaptureSessionService_;
-    IntegratedCalibrationCaptureService integratedCalibrationCaptureService_;
-    IntegratedScanService integratedScanService_;
     ReconstructionCaptureSessionService reconstructionCaptureSessionService_;
     CalibrationService calibrationService_;
     ReconstructionService reconstructionService_;
@@ -161,6 +150,7 @@ private:
     LogPanel* logPanel_ = nullptr;
     PointCloudViewWidget* pointCloudView_ = nullptr;
     CaptureReviewWidget* captureReviewWidget_ = nullptr;
+    CaptureReviewWidget* laserExtractionReviewWidget_ = nullptr;
     SerialCommandPackWidget* serialCommandPackWidget_ = nullptr;
     ImageViewWidget* liveLeftImageView_ = nullptr;
     ImageViewWidget* liveRightImageView_ = nullptr;
@@ -174,21 +164,17 @@ private:
     AcquisitionSessionResult acquisition_;
     AcquisitionSessionResult calibrationCapture_;
     AcquisitionSessionResult reconstructionCapture_;
-    IntegratedWorkflowResult autoCalibrationWorkflow_;
-    IntegratedWorkflowResult scanWorkflow_;
     bool galvoLaserEnabled_ = false;
     bool busy_ = false;
+    CancellationToken shutdownCancellation_;
     std::atomic_bool shuttingDown_ = false;
     std::atomic_bool livePreviewStopRequested_ = false;
     std::chrono::steady_clock::time_point liveFpsWindowStart_;
     int liveFpsFrameCount_ = 0;
     QFutureWatcher<CalibrationResult> calibrationWatcher_;
-    QFutureWatcher<ReconstructionResult> reconstructionWatcher_;
-    QFutureWatcher<AcquisitionSessionResult> acquisitionWatcher_;
+    QFutureWatcher<ReconstructionTaskResult> reconstructionWatcher_;
     QFutureWatcher<AcquisitionSessionResult> calibrationFrameWatcher_;
     QFutureWatcher<AcquisitionSessionResult> reconstructionCaptureWatcher_;
-    QFutureWatcher<IntegratedWorkflowResult> autoCalibrationWatcher_;
-    QFutureWatcher<IntegratedWorkflowResult> scanWorkflowWatcher_;
     QFutureWatcher<GalvoMotionVerificationResult> reconstructionGalvoPreflightWatcher_;
     QFutureWatcher<void> livePreviewWatcher_;
     QFutureWatcher<GalvoMotionVerificationResult> galvoMotionParametersWatcher_;

@@ -173,6 +173,8 @@ struct AppProjectConfig {
     std::string rightCalibrationDirectory;
     std::string leftReconstructionDirectory;
     std::string rightReconstructionDirectory;
+    std::string laserExtractionDirectory = "output/LaserExtraction";
+    bool saveLaserExtractionImages = false;
     std::string calibrationFile = "stereo_calibration.yml";
     std::string outputDirectory = "output";
     CalibrationInput calibrationInput;

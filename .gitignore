@@ -17,3 +17,6 @@ __pycache__/
 point_cloud.txt
 stereo_calibration.yml
 CMakeUserPresets.json
+/config/*.ini
+/config/*.json
+/reference-archives/

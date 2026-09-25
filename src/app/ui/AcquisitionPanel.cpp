@@ -29,7 +29,7 @@
 namespace htmsr::app {
 namespace {
 
-constexpr char kDefaultOutputDirectory[] = "C:/PROJECT/HTMSR/output";
+constexpr char kDefaultOutputDirectory[] = "output";
 
 QWidget* wrapPathRow(QLineEdit* edit, QPushButton* button)
 {
@@ -179,8 +179,13 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     auto* reconstructionForm = new QFormLayout(reconstructionGroup);
     leftReconstructionEdit_ = createPathRow(reconstructionForm, QString::fromUtf8("左重建目录"), true);
     rightReconstructionEdit_ = createPathRow(reconstructionForm, QString::fromUtf8("右重建目录"), true);
+    laserExtractionDirectoryEdit_ = createPathRow(reconstructionForm, QString::fromUtf8("激光线目录"), true);
     leftReconstructionEdit_->setObjectName("leftReconstructionDirectory");
     rightReconstructionEdit_->setObjectName("rightReconstructionDirectory");
+    laserExtractionDirectoryEdit_->setObjectName("laserExtractionDirectory");
+    laserExtractionDirectoryEdit_->setText(QStringLiteral("output/LaserExtraction"));
+    saveLaserExtractionImagesCheck_ = new QCheckBox(QString::fromUtf8("保存并加载激光线图片"));
+    saveLaserExtractionImagesCheck_->setObjectName("saveLaserExtractionImages");
     laserModeCombo_ = new QComboBox;
     laserModeCombo_->addItems({ QString::fromUtf8("灰度重心"), QString::fromUtf8("Steger") });
     laserModeCombo_->setCurrentIndex(0);
@@ -216,6 +221,7 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     rightRoiLayout->addWidget(rightRoiWSpin_);
     rightRoiLayout->addWidget(rightRoiHSpin_);
 
+    reconstructionForm->addRow(saveLaserExtractionImagesCheck_);
     reconstructionForm->addRow(QString::fromUtf8("算法"), laserModeCombo_);
     reconstructionForm->addRow(QString::fromUtf8("颜色"), laserColorCombo_);
     reconstructionForm->addRow(QString::fromUtf8("左ROI x/y/w/h"), leftRoiLayout);
@@ -297,6 +303,7 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     connect(rightCalibrationEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
     connect(leftReconstructionEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
     connect(rightReconstructionEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
+    connect(laserExtractionDirectoryEdit_, &QLineEdit::textChanged, this, [this]() { updateActionButtons(); });
     connect(calibrationFileEdit_, &QLineEdit::editingFinished, this, [this]() {
         if (!calibrationFileEdit_->isModified()) {
             return;
@@ -348,7 +355,12 @@ AcquisitionPanel::AcquisitionPanel(QWidget* parent)
     for (auto* combo : {laserModeCombo_, laserColorCombo_, reconstructionCaptureModeCombo_})
         connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { emit projectConfigChanged(); });
     connect(removeEndpointsCheck_, &QCheckBox::toggled, this, [this](bool) { emit projectConfigChanged(); });
-    for (auto* edit : {leftCalibrationEdit_, rightCalibrationEdit_, leftReconstructionEdit_, rightReconstructionEdit_, calibrationFileEdit_})
+    connect(saveLaserExtractionImagesCheck_, &QCheckBox::toggled, this, [this](bool) {
+        updateActionButtons();
+        emit projectConfigChanged();
+    });
+    for (auto* edit : {leftCalibrationEdit_, rightCalibrationEdit_, leftReconstructionEdit_, rightReconstructionEdit_,
+             laserExtractionDirectoryEdit_, calibrationFileEdit_})
         connect(edit, &QLineEdit::textChanged, this, [this]() { emit projectConfigChanged(); });
     triggerLineSpin_->setEnabled(reconstructionCaptureModeCombo_->currentIndex() == 0);
     updateDerivedFrameCount();
@@ -497,6 +509,8 @@ AppProjectConfig AcquisitionPanel::projectConfig() const
     const auto reconstruction = reconstructionInput({});
     config.leftReconstructionDirectory = reconstruction.leftDirectory;
     config.rightReconstructionDirectory = reconstruction.rightDirectory;
+    config.laserExtractionDirectory = pathOf(laserExtractionDirectoryEdit_);
+    config.saveLaserExtractionImages = saveLaserExtractionImagesCheck_->isChecked();
     config.calibrationFile = textOf(calibrationFileEdit_);
     config.outputDirectory = outputDirectory_;
     config.calibrationInput = calibrationInput();
@@ -563,6 +577,9 @@ void AcquisitionPanel::setProjectConfig(const AppProjectConfig& config)
     rightCalibrationEdit_->setText(QString::fromStdString(config.restoreInputPaths ? config.rightCalibrationDirectory : std::string{}));
     setReconstructionDirectories(config.restoreInputPaths ? config.leftReconstructionDirectory : std::string{},
         config.restoreInputPaths ? config.rightReconstructionDirectory : std::string{});
+    laserExtractionDirectoryEdit_->setText(QDir::fromNativeSeparators(
+        QString::fromStdString(config.laserExtractionDirectory.empty() ? "output/LaserExtraction" : config.laserExtractionDirectory)));
+    saveLaserExtractionImagesCheck_->setChecked(config.saveLaserExtractionImages);
     calibrationFileEdit_->setText(QString::fromStdString(config.restoreInputPaths ? config.calibrationFile : std::string{}));
     outputDirectory_ = config.outputDirectory.empty() ? kDefaultOutputDirectory : config.outputDirectory;
     boardWidthSpin_->setValue(config.calibrationInput.boardSize.width);
@@ -788,6 +805,8 @@ void AcquisitionPanel::updateActionButtons()
     exportReconstructionButton_->setEnabled(idle && reconstructionResultAvailable_);
     leftReconstructionEdit_->parentWidget()->setEnabled(idle);
     rightReconstructionEdit_->parentWidget()->setEnabled(idle);
+    laserExtractionDirectoryEdit_->parentWidget()->setEnabled(idle);
+    saveLaserExtractionImagesCheck_->setEnabled(idle);
     galvoTotalRotationAngleSpin_->setEnabled(idle);
     galvoStepAngleSpin_->setEnabled(idle);
     galvoSpeedSpin_->setEnabled(idle);

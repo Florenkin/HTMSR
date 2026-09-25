@@ -1,13 +1,19 @@
 #pragma once
+#include "core/Cancellation.h"
 
 #include "core/LaserExtractionService.h"
 #include "core/PointCloudService.h"
 #include "core/Types.h"
 
+#include <functional>
+
 namespace htmsr {
 
 class ReconstructionService {
 public:
+    using FramePreviewCallback = std::function<void(
+        int frameIndex, const cv::Mat& leftPreview, const cv::Mat& rightPreview)>;
+
     /*
         函数功能：批量读取左右重建图像，并对每一对图像执行三维重建
         输入：
@@ -15,7 +21,8 @@ public:
         输出：
             返回值：逐帧重建结果和合并后的三维点云
     */
-    ReconstructionResult reconstruct(const ReconstructionInput& input) const;
+    ReconstructionResult reconstruct(const ReconstructionInput& input, CancellationToken cancellation = {},
+        const FramePreviewCallback& previewCallback = {}) const;
 
 private:
     /*
@@ -39,7 +46,9 @@ private:
         double matchDistanceThreshold,
         cv::Mat& leftPreview,
         cv::Mat& rightPreview,
-        FrameReconstructionDiagnostics& diagnostics) const;
+        FrameReconstructionDiagnostics& diagnostics,
+        int frameIndex,
+        const FramePreviewCallback& previewCallback) const;
 
     /*
         函数功能：将像素坐标根据相机内参转换为归一化相机射线

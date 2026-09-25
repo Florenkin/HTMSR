@@ -1,6 +1,6 @@
 # HTMSR 详细项目文档
 
-本文整合项目介绍、开发环境、编译部署、界面操作、数据组织、测试和开发规范。内容以当前源码、CMake 配置及 `config` 配置文件为准，整理日期为 2026-09-18。
+本文整合项目介绍、开发环境、编译部署、界面操作、数据组织、测试和开发规范。内容以当前源码、CMake 配置及 `config` 配置文件为准，整理日期为 2026-09-23。
 
 ## 阅读导航
 
@@ -18,7 +18,7 @@
 
 ## 1. 项目概述与能力边界
 
-HTMSR 是面向双目线激光扫描的 Windows 桌面软件，使用 Qt Widgets 构建界面，使用 OpenCV 完成双目标定和图像处理，使用 Eigen 完成几何计算，使用 PCL 读写点云，使用 VTK 提供可交互的三维显示。在线设备部分通过海康 MVS SDK 连接工业相机，通过 Windows COM 串口与振镜控制器通信。
+HTMSR 是面向双目线激光扫描的 Windows 桌面软件，使用 Qt Widgets 构建界面，使用 OpenCV 完成双目标定和图像处理，使用 Eigen 完成几何计算，内置 PCD/TXT 点云读写，使用 VTK 提供可交互的三维显示。在线设备部分通过海康 MVS SDK 连接工业相机，通过 Windows COM 串口与振镜控制器通信。
 
 主要处理流程为：准备双目图像 → 标定左右相机 → 采集或导入线激光图像 → 提取左右中心线 → 双目匹配与三维恢复 → 保存并查看点云。
 
@@ -26,11 +26,12 @@ HTMSR 是面向双目线激光扫描的 Windows 桌面软件，使用 Qt Widgets
 | --- | --- |
 | 双目标定 | 读取棋盘格双目图像，计算内参、畸变、外参和误差统计，自动保存标定文件 |
 | 标定采集 | 点击一次“采集”保存一对当前图像，重复点击向当前会话追加 |
-| 激光中心线 | 支持灰度重心法和 Steger 方法，可配置通道、ROI、阈值和端点处理 |
+| 激光中心线 | 支持灰度重心法和 Steger 方法，可配置通道、ROI、阈值和端点处理；可选保存原图叠加红色中心线的诊断图 |
 | 离线重建 | 从当前选择的左右目录读取图像，结合有效标定结果恢复三维点 |
 | 扫描采集 | 振镜角度设置及回读预检、相机就绪、扫描触发、双目配对和保存 |
 | 实时预览 | 显示左右相机图像和预览帧率，协调预览与采集对设备的占用 |
 | 采集查看 | 左侧图像预览、详情图切换及逐对图像删除 |
+| 激光线查看 | 重建结束后加载左右提线诊断图，支持缩略图、缩放、平移和左右切换，只读显示 |
 | 点云查看 | 加载 PCD/TXT/XYZ，点云列表选择、重命名和逐条移除；VTK 构建支持三维交互 |
 | 结果输出 | 标定自动保存，重建自动保存 TXT 和 PCD，也可通过“导出”另存结果 |
 | 串口命令 | 单条十六进制命令、命令包、等待步骤、查询回包和最近返回记录 |
@@ -45,13 +46,14 @@ HTMSR 是面向双目线激光扫描的 Windows 桌面软件，使用 Qt Widgets
 
 ### 2.1 主窗口
 
-顶部直接显示“双目、点云、采集、命令”四个标签页。公共菜单栏和旧的三个工具栏图标已经移除，界面不再通过这些菜单或图标提供入口。
+顶部直接显示“双目、点云、采集、激光线、命令”五个标签页。公共菜单栏和旧的三个工具栏图标已经移除，界面不再通过这些菜单或图标提供入口。
 
 | 区域 | 用途 |
 | --- | --- |
 | 双目 | 查看左右实时图像，观察相机是否连接及当前预览帧率 |
 | 点云 | 查看重建点云或加载已有点云，管理预览栏中的点云条目 |
 | 采集 | 查看当前采集会话的图像缩略图和详情，切换左右图像，删除图像对 |
+| 激光线 | 重建完成后查看本次保存的左右提线图片；页面只读，不删除历史文件 |
 | 命令 | 编辑、保存和发送命令包；输入单条命令，查看返回命令 |
 | 右侧“在线工作流” | 硬件选择和参数，以及“标定”“重建”两个工作流页 |
 | 底部“消息” | 时间、级别、模块和消息，默认约两行高度，可扩展查看历史 |
@@ -61,9 +63,9 @@ HTMSR 是面向双目线激光扫描的 Windows 桌面软件，使用 Qt Widgets
 
 公共硬件区包含左相机、右相机、振镜串口、触发线、曝光、采集模式和“刷新设备”。
 
-“标定”页包含左右标定目录、标定文件、棋盘格参数，以及“采集、标定、导出”。“重建”页包含左右重建目录、算法与颜色选择、ROI 和提线参数，以及“采集、重建、导出”。
+“标定”页包含左右标定目录、标定文件、棋盘格参数，以及“采集、标定、导出”。“重建”页包含左右重建目录、激光线目录、“保存并加载激光线图片”、算法与颜色选择、ROI 和提线参数，以及“采集、重建、导出”。激光线图片默认不保存；勾选后会在本次重建结束时统一加载到“激光线”页。
 
-当前界面不提供旧文档中提到的“参数监控”切换入口、独立资源树、“采集保存”和“一键自动标定”等旧按钮。源码中的部分服务或方法仍保留相应流程实现，用户操作以当前右侧按钮为准。
+当前界面不提供旧文档中提到的“参数监控”切换入口、独立资源树、“采集保存”和“一键自动标定”等旧按钮。无入口的旧参数面板及组合工作流已经清理，用户操作以当前右侧按钮为准。
 
 导出需要有可用结果，并且当前任务处于空闲状态。任务执行期间，会锁定相关参数、路径或按钮，避免同一设备被并行操作。
 
@@ -86,7 +88,6 @@ HTMSR/
 │   │   ├── acquisition/          相机、串口、触发配对和采集接口
 │   │   ├── services/             配置、会话、结果存储和流程服务
 │   │   └── ui/                   窗口、面板、图像、点云和命令组件
-│   └── references/               历史参考实现与第三方参考资料
 ├── test/                         唯一的测试代码目录
 │   └── fakes/                    测试专用模拟 SDK 接口
 ├── out/                          构建、发布整理和测试检查产物
@@ -96,7 +97,7 @@ HTMSR/
 
 `docs` 中的开发环境表、准备指南和开发规范已经归并到本文。旧 `scripts` 目录已经移除，本文使用的构建命令不依赖该目录。`.vs` 等 IDE 生成目录不属于业务源码，`out` 中的旧缓存和可执行文件不应作为换电脑编译的输入。
 
-`src/references` 中的资料只供分析参考，不是当前应用业务代码入口，也不应把其中示例测试迁入本项目测试目录或直接当作已实现功能。
+历史参考资料已完整移动到本机的 `reference-archives/references`，不再纳入源码版本管理；文件校验记录为 `reference-archives/manifest.json`。来源与恢复说明见 `REFERENCE_MATERIALS.md`。历史 Git 提交仍包含这些资料，此次未重写历史。
 
 ### 3.2 分层职责
 
@@ -124,14 +125,16 @@ HTMSR/
 | 振镜串口及扫描预检 | `src/app/acquisition/GalvoController.cpp`、`GalvoCaptureSupport.cpp` |
 | 标定/重建采集会话 | `src/app/services/CalibrationCaptureSessionService.cpp`、`ReconstructionCaptureSessionService.cpp` |
 | 结果保存与导出 | `src/app/services/ReconstructionStorage.cpp`、`ResultExportService.cpp` |
-| 组合工作流 | `src/app/services/IntegratedCalibrationCaptureService.cpp`、`IntegratedScanService.cpp` |
 | 分类配置和延时保存 | `src/app/services/ConfigFiles.cpp`、`AppConfigService.cpp`、`ConfigAutoSave.h` |
 | 日志 | `src/core/Logger.cpp`、`src/app/services/FileLogSink.cpp`、`QtLogSink.cpp` |
-| 窗口与流程连接 | `src/app/ui/MainWindow.cpp` |
+| 窗口布局与关闭生命周期 | `src/app/ui/MainWindow.cpp` |
+| 标定、采集与重建流程 | `src/app/ui/MainWindowWorkflow.cpp` |
+| 串口、命令包与振镜预检 | `src/app/ui/MainWindowCommands.cpp` |
+| 双目预览与帧率 | `src/app/ui/MainWindowPreview.cpp` |
 | 当前参数面板 | `src/app/ui/AcquisitionPanel.cpp` |
 | 图像/点云/命令组件 | `CaptureReviewWidget.cpp`、`PointCloudViewWidget.cpp`、`SerialCommandPackWidget.cpp` |
 
-`ParameterPanel` 等保留代码不等于当前主窗口正在使用的参数入口，查找界面逻辑应先阅读 `MainWindow::buildDocks` 和 `buildCentralView`。
+查找界面布局应先阅读 `MainWindow::buildDocks` 和 `buildCentralView`，具体工作流程分布于对应的窗口实现文件。
 
 ## 4. 开发环境与依赖
 
@@ -140,13 +143,11 @@ HTMSR/
 | 依赖 | 当前使用基线/要求 | 用途 |
 | --- | --- | --- |
 | Visual Studio/MSVC | 安装“使用 C++ 的桌面开发”，使用兼容的 MSVC x64 工具链 | 编译、链接和调试 |
-| CMake | 3.24 或以上 | 读取配置、生成构建和组织测试 |
+| CMake | 3.25 或以上 | 读取配置、生成构建、工作流预设和组织测试 |
 | Ninja | 可使用 VS 随附版本 | 公共预设的构建后端 |
 | Qt | 当前基线为 5.15.2 `msvc2019_64`，需 Widgets、Concurrent、OpenGL | 桌面界面、并发任务和渲染集成 |
 | OpenCV | 当前基线为 4.5.0 | 图像、棋盘格检测、标定与畸变处理 |
 | Eigen | 配置目录需包含 `Eigen/Core` | 矩阵、射线与三维几何 |
-| PCL | 当前基线为 1.12.1，使用 common/io | 点云数据和 PCD 读写 |
-| Boost/Qhull/FLANN/OpenNI2 等 | 与 PCL 安装包或构建相容 | PCL 的直接或间接依赖 |
 | VTK Qt | 当前 Release 使用 9.1 的 Qt 构建，需 `VTK::GUISupportQt` 等组件 | 嵌入式三维点云显示 |
 | 海康 MVS SDK | 启用海康支持时必需，含头文件和 x64 导入库 | 相机参数与取流接口 |
 | MVS Runtime/设备驱动 | 真实相机运行时需要 | 设备发现、传输和运行库 |
@@ -154,7 +155,7 @@ HTMSR/
 | Microsoft C++ 运行环境 | 与发布构建匹配 | 程序及第三方库的运行支持 |
 | Git | 使用仓库下载和版本管理时需要 | 源码获取和协作 |
 
-这些版本是当前项目使用记录，不代表任意新版本可以直接替换。更换版本时需要重新检查接口、工具链、位数、Debug/Release 和运行库兼容性。PCL 自带 VTK 不一定包含与应用 Qt 匹配的 Qt 显示组件。
+这些版本是当前项目使用记录，不代表任意新版本可以直接替换。更换版本时需要重新检查接口、工具链、位数、Debug/Release 和运行库兼容性。VTK 必须包含与应用 Qt 匹配的 Qt 显示组件。
 
 公共预设仍使用 `vs2022-x64-*` 名称，用于固定构建流程；依赖安装路径不要求包含这些名称。当前电脑使用的 `ENVIORNMENT` 只是目录拼写，不是新电脑必须遵循的目录约定。
 
@@ -165,9 +166,9 @@ HTMSR/
 | 文件 | 保存内容 | 生效方式 |
 | --- | --- | --- |
 | `calibration.ini` | 内角点数量、单格宽高、标定图像索引 | 启动读取，界面可修改并自动保存 |
-| `reconstruction.ini` | 算法、通道、左右 ROI、阈值、线宽、端点、匹配和索引 | 启动读取，界面及文件配置共同构造任务输入 |
+| `reconstruction.ini` | 算法、通道、左右 ROI、阈值、线宽、端点、匹配、索引和激光线图片保存开关 | 启动读取，界面及文件配置共同构造任务输入 |
 | `acquisition.ini` | 曝光、触发、角度、速度、增益、超时、串口、扫描时序、激光和电压 | 启动读取，设备任务使用相应配置 |
-| `paths.ini` | 输入目录、标定文件、输出与日志目录、路径恢复开关 | 启动读取，路径选择自动保存 |
+| `paths.ini` | 输入目录、标定文件、点云/采集输出、激光线输出与日志目录、路径恢复开关 | 启动读取，路径选择自动保存 |
 | `environment.ini` | `[build]` 构建依赖和开关，`[runtime]` 插件及补充 DLL 目录 | 构建部分重新配置并编译，运行部分重新启动 |
 | `command_packs.json` | 命令包名称、文本和中文说明字段 | 命令页加载，编辑后点击“保存” |
 
@@ -195,7 +196,9 @@ useHardwareTrigger=true
 
 ### 5.3 配置目录与相对路径
 
-在当前工程编译时，默认配置目录为 `C:\PROJECT\HTMSR\config`。在新位置重新编译，会使用新源码目录下的 `config`。可在启动前设置 `HTMSR_CONFIG_DIR`，覆盖运行时配置目录。
+运行配置查找顺序：启动前设置的 `HTMSR_CONFIG_DIR` → 可执行程序同目录的 `config`（存在时）→ 编译时源码目录的 `config`。发布包自带相邻 `config`，无需旧电脑源码目录。
+
+`config/defaults` 保存带中文注释的版本化模板；`config` 下实际使用的 INI 和命令包 JSON 为本机配置，已忽略版本管理。缺少文件时从模板初始化，已有文件不覆盖。新克隆工程首次配置会生成 `environment.ini` 并提示填写依赖路径；其他参数文件在启动时初始化。默认输入路径为空，输出路径为相对目录 `output`。
 
 ```powershell
 # 示例：为此次启动明确选择配置目录。
@@ -212,7 +215,7 @@ $env:HTMSR_CONFIG_DIR = 'D:\HTMSR\config'
 
 例如 `outputDirectory=output` 表示项目目录下的 `output`，`logDirectory=../log` 表示 `config` 旁边的 `log`。
 
-`restoreInputPaths=true` 恢复上次输入目录和标定文件；设为 `false` 时启动输入路径为空，数值参数仍恢复。路径恢复不等于重新执行标定或重建，软件也不会据此自动下发扫描动作。
+`restoreInputPaths=true` 恢复上次输入目录和标定文件；设为 `false` 时启动输入路径为空，数值参数仍恢复。作为输出位置的 `laserExtractionDirectory` 不受该开关影响。路径恢复不等于重新执行标定或重建，软件也不会据此自动下发扫描动作。
 
 `HTMSR_CONFIG_DIR` 控制软件运行配置；CMake 默认仍从源码的 `config/environment.ini` 读取构建依赖。需要为专用构建使用另一文件时，可通过 CMake 的 `HTMSR_ENVIRONMENT_FILE` 指定它。
 
@@ -222,13 +225,11 @@ $env:HTMSR_CONFIG_DIR = 'D:\HTMSR\config'
 | --- | --- |
 | `Qt5_DIR` | 包含 `Qt5Config.cmake` 的目录 |
 | `OpenCV_DIR` | 包含 `OpenCVConfig.cmake` 的目录 |
-| `PCL_DIR` | 包含 `PCLConfig.cmake` 的目录 |
 | `VTK_DIR` | Release 所用 VTK 配置目录，包含 `vtk-config.cmake` |
 | `VTK_DIR_DEBUG` | 匹配 Debug 的 VTK 配置目录，没有时留空 |
 | `HTMSR_EIGEN_INCLUDE_DIR` | 包含 `Eigen/Core` 的根目录 |
 | `HIK_MVS_ROOT` | 包含 `Development` 的 MVS SDK 根目录 |
 | `HIK_MVS_RUNTIME_DIR` | 包含 `MvCameraControl.dll` 等文件的运行库目录 |
-| `OPENNI2_LIBRARY` | `OpenNI2.lib` 的完整路径 |
 | `CMAKE_PREFIX_PATH` | 可选额外搜索目录，多项用分号分隔，通常留空 |
 | `HTMSR_ENABLE_HIK_CAMERA` | 是否编译海康设备支持 |
 | `HTMSR_ENABLE_VTK_VIEWER` | Release 是否启用嵌入 VTK 视图 |
@@ -236,7 +237,7 @@ $env:HTMSR_CONFIG_DIR = 'D:\HTMSR\config'
 | `HTMSR_ENABLE_VTK_VIEWER_DEBUG` | Debug 是否启用嵌入 VTK 视图 |
 | `HTMSR_REQUIRE_VTK_VIEWER_DEBUG` | Debug 是否要求视图必须可用 |
 
-CMake 在创建工程和查找依赖前读取配置。它自动根据主要依赖路径推导 `CMAKE_PREFIX_PATH`，扫描 PCL 的第三方目录，不要求固定的 Boost 版本文件夹名。另装的依赖才需要在可选前缀中补充目录。
+CMake 在创建工程和查找依赖前读取配置。它自动根据 Qt、OpenCV、VTK 和 Eigen 的路径推导 `CMAKE_PREFIX_PATH`；另装的依赖才需要在可选前缀中补充目录。
 
 配置变更会刷新相关依赖查找缓存，避免继续引用旧电脑路径。不需要再次编辑 `CMakeUserPresets.json` 或手动修改 `CMakeCache.txt`。公共预设保留生成器、构建类型和输出目录，本机预设仅是可选的构建偏好。
 
@@ -329,24 +330,31 @@ cmake --build --preset debug --parallel 4
 
 只运行现成程序的电脑不需要完整 SDK、头文件和编译工具，但需要匹配的运行库、配置和所用设备驱动。
 
-可将 Release 产物整理到独立目录，例如：
+在 x64 开发者终端完成 Release 构建后，生成独立发布目录：
+
+```powershell
+cmake --build --preset release --target distribute
+# 可选：生成 ZIP 发布包
+cmake --build --preset release --target package
+```
+
+发布目录为 `out/package/HTMSR`，ZIP 也位于 `out/package`。结构如下：
 
 ```text
-HTMSR_release/
+HTMSR/
 ├── config/                       分类配置
-├── bin/
-│   ├── htmsr_app.exe
-│   ├── qt.conf
-│   ├── *.dll                     匹配的直接和间接运行库
-│   ├── platforms/qwindows.dll
-│   ├── styles/                   需要的 Qt 样式插件
-│   └── imageformats/             需要的 Qt 图像格式插件
+├── htmsr_app.exe
+├── qt.conf
+├── *.dll                         匹配的直接和间接运行库
+├── platforms/qwindows.dll
+├── styles/                       Qt 样式插件
+├── imageformats/                 Qt 图像格式插件
 └── README.md
 ```
 
-将所需 Qt、OpenCV、PCL、VTK、OpenNI2、MVS 及间接依赖一并整理，安装匹配的 Microsoft C++ 运行环境。此结构是发布整理示例，项目目前并未提供完整自动安装器；`imageformats` 等是否需要由实际功能和部署检查决定。
+发布目标检查程序和 Qt 插件的直接、间接 DLL，缺失依赖则失败。已部署的运行库优先，SDK 搜索目录只补齐缺失模块；`runtime-dependencies.txt` 记录解析结果。换依赖版本后仍须做发布启动与实际功能验收，导入表检查不能证明不同构建之间完全兼容。发布配置取自模板，不携带开发机私有路径；再次发布保留目标目录已有配置。需要改动配置模板时同步维护 `config/defaults`。
 
-在新电脑启动前，将 `HTMSR_CONFIG_DIR` 指向发布目录的 `config`。现成程序默认仍记住编译时的源码配置目录，不能仅把 `config` 复制到 exe 附近就假定会自动找到。
+新电脑解压整个目录后直接启动，默认读取 exe 相邻的 `config`。安装所用设备驱动；无需为已经打包的依赖填写开发 SDK 路径。不要只复制 exe。此目标提供便携目录与 ZIP，不提供安装向导。
 
 普通运行机器使用 Release 发布包。Debug 产物依赖开发调试环境，不作为普通用户发布版本。运行时不要混用其他 Qt/VTK 版本或 Debug DLL。
 
@@ -542,6 +550,10 @@ WAIT 1000
 
 ```text
 output/
+├── LaserExtraction/
+│   └── <yyyyMMdd_HHmmss_zzz>/
+│       ├── left/frame_000001.png
+│       └── right/frame_000001.png
 ├── calibration/
 │   ├── capture/
 │   │   └── calibration_capture_<时间戳>_<标识>/
@@ -561,17 +573,23 @@ output/
 
 重建结果使用可识别采集会话的时间戳；普通离线目录使用完成时刻。重建会话和结果发生重名时追加序号，保留历史文件。TXT 按每行 `x y z` 保存，PCD 用于点云软件交换。手动导出将有效结果保存到用户指定目标，不能与自动生成历史文件的策略混为一谈。
 
+`LaserExtraction` 是默认激光线输出目录，可在界面中改为其它位置。仅在勾选保存选项时创建本次毫秒时间戳会话；左右 PNG 必须成对保存，单侧失败会删除已生成的另一侧。提线为空或后续匹配失败的可处理帧仍保存诊断图，保存失败只记录警告，不中断点云重建。
+
 ### 12.2 采集筛选
 
 “采集”页显示当前会话的图像对，选择条目查看详情，“切换”切换详情左右图。“删除”确认后删除该对左右图像的磁盘文件，并更新当前会话记录；部分文件无法删除时报告失败。
 
 删除图像对后，应重新核对离线配对数量。此操作与点云预览条目移除的行为不同。
 
-### 12.3 点云预览
+### 12.3 激光线预览
 
-支持加载 PCD 和含 XYZ 的 TXT/XYZ 文件；非有限坐标会被过滤，空或非法数据报告错误。列表可选择、重命名和删除点云条目，逐条删除仅移除预览项，不删除磁盘源文件。
+“激光线”页复用成对图像查看器，左侧延迟加载左右缩略图，右侧可缩放、平移并切换左右图。新重建开始时清空旧页面；未勾选保存时显示“本次未启用激光线图片保存”。页面不会自动切换，也不会删除历史会话目录。
 
-启用并找到兼容的 VTK Qt 组件时，使用 `QVTKOpenGLNativeWidget` 和原生 VTK 管线进行三维交互，不应将当前显示实现写成 PCLVisualizer 页面。
+### 12.4 点云预览
+
+支持加载 ASCII 或未压缩二进制 PCD，以及含 XYZ 的 TXT/XYZ 文件；压缩 PCD 会明确报告不支持，非有限坐标会被过滤，空或非法数据报告错误。程序保存标准 PCD 0.7 二进制 XYZ 数据。列表可选择、重命名和删除点云条目，逐条删除仅移除预览项，不删除磁盘源文件。
+
+启用并找到兼容的 VTK Qt 组件时，使用 `QVTKOpenGLNativeWidget` 和原生 VTK 管线进行三维交互。
 
 当前 Release 配置启用且要求 VTK 视图可用：依赖不符合时配置失败。若明确接受替代视图，应在 `environment.ini` 中调整“启用”和“必须可用”开关。Debug 没有匹配的 VTK Qt 时，保持对应 `_DEBUG` 开关关闭。替代显示实现仍允许算法和文件输出，但与 VTK 交互效果不同。
 
@@ -603,12 +621,12 @@ output/
 ### 14.2 启用和执行
 
 ```powershell
-cmake --preset vs2022-x64-release -DHTMSR_BUILD_CAPTURE_TESTS=ON
+cmake --preset vs2022-x64-release
 cmake --build --preset release --parallel 4
 ctest --test-dir .\out\build\vs2022-x64-release --output-on-failure
 ```
 
-海康配置模拟测试还需要 `[build]` 中 `HTMSR_ENABLE_HIK_CAMERA=true`，开关依然以 `environment.ini` 为准。普通编译不自动执行测试。
+公共 Debug/Release 预设默认开启测试编译。普通构建不自动执行测试；可用 `cmake --workflow --preset verify-release` 或 `verify-debug` 连续执行配置、编译、测试。预设需要 CMake 3.25 或更新版本。海康配置模拟测试还需要 `[build]` 中 `HTMSR_ENABLE_HIK_CAMERA=true`。
 
 | CTest 名称 | 实现/程序 | 主要验证 |
 | --- | --- | --- |
@@ -643,6 +661,8 @@ Qt 界面测试默认离屏运行，CMake 部署匹配构建的 Qt 运行库和�
 
 此手动工具等待初始化日志、检查进程保持运行，保存检查日志到 `out/startup-review`，最后仅结束它自身启动的进程。它会进行正常设备发现和预览，不执行扫描；默认读取项目 `log`，自定义日志目录时用 `-LogDirectory` 指定。它不属于默认 CTest。
 
+发布包另用 `test/PortablePackageSmoke.ps1 -Executable out/package/HTMSR/htmsr_app.exe` 检查：子进程仅保留 Windows 系统 PATH，清除 Qt 和配置路径覆盖，使用无关工作目录，确认相邻配置和启动日志，然后请求正常关闭。它使用发布包配置，不改写源码目录参数。
+
 ### 14.5 实机检查
 
 先确认 MVS 客户端识别左右相机，再释放占用并由本程序刷新设备。核对振镜串口、参数回读、触发线和双目接线，使用小规模采集验证后再进行完整扫描。
@@ -653,13 +673,13 @@ Qt 界面测试默认离屏运行，CMake 部署匹配构建的 Qt 运行库和�
 
 ### 14.6 当前验证记录
 
-截至本文整理时，本机 Release 编译、六组 CTest 和实际启动检查通过；Debug 配置、日志及配置测试独立启动验证通过。Debug 综合诊断测试此前仍出现崩溃，未完成修复，不能将 Debug 全量回归记为通过。这些记录仅对应本机当前环境，不代替新电脑和真实设备验收。
+2026-09-23 本机 Release 与 Debug 配置、完整构建及各六组 CTest 均通过。新增测试覆盖配置模板保护与协作取消。便携发布目录通过仅含 Windows 系统目录 PATH、无关工作目录、相邻配置加载及正常关闭检查。发布使用当前 MSVC 工具链的运行库，避免依赖包附带的旧版 CRT 引发启动崩溃。这些记录仅对应本机当前环境，不代替新电脑和真实设备验收。
 
 ## 15. 常见问题排查
 
 ### 15.1 配置时找不到依赖
 
-检查 `environment.ini` 的目录是否包含对应 CMake 配置文件、Eigen 根目录是否正确、MVS SDK 是否有 `Development/Includes/MvCameraControl.h` 和 x64 库。特殊依赖不在 PCL 第三方目录时，在配置文件中补充搜索前缀。
+检查 `environment.ini` 的目录是否包含对应 CMake 配置文件、Eigen 根目录是否正确、MVS SDK 是否有 `Development/Includes/MvCameraControl.h` 和 x64 库。另装的特殊依赖可在配置文件中补充搜索前缀。
 
 检查输出中的 `HTMSR: loaded build environment from ...`，确认实际读取的环境文件。当前路径变化会自动刷新相关查找缓存；若更换工具链或残留旧产物，可在 VS 中删除缓存重新配置，或创建新构建目录。
 
@@ -750,17 +770,15 @@ target_compile_definitions(htmsr_app PRIVATE HTMSR_WITH_VTK_VIEWER=0)
 target_compile_options(htmsr_app PRIVATE /utf-8)
 ```
 
-第三方传入的宏和选项需先清洗：去除多余 `-D`、拆分错误拼接、去重和拒绝非法宏名。当前相关函数为 `htmsr_normalize_compile_definitions`、`htmsr_normalize_compile_options` 和 `htmsr_sanitize_imported_compile_definitions`。
-
-`BOOST_ALL_NO_LIB` 用于由 CMake 显式链接 Boost，可保留；`BOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB` 是非法拼接，必须修正。
-
-仅在 `.cpp` 使用的第三方库作为实现依赖，优先 PRIVATE，不将其宏和选项无条件 PUBLIC 传播。PCL 等 imported target 携带不合适 usage requirements 时，使用 LINK_ONLY 隔离，并显式配置需要的头文件和干净宏。
+仅在 `.cpp` 使用的第三方库作为实现依赖，优先 PRIVATE，不将其宏和选项无条件 PUBLIC 传播。新增 imported target 时应检查其头文件、宏和编译选项是否会错误传播到其他目标。
 
 ### 16.4 分层、任务与设备
 
 遵循第 3 章职责边界。新增完整业务流程优先进入服务层，算法进入 core，设备实现进入 acquisition，页面仅收集参数并展示状态。
 
 耗时设备操作和算法任务沿用异步工作任务和结果回传，避免阻塞界面。任务输入使用校验后的参数快照，设备占用、任务结束和窗口关闭时的资源释放需明确处理；不得把进度和预览缓存保存为工程参数。
+
+关闭窗口会请求协作取消，并通过事件循环等待任务释放设备后再退出。标定阶段、重建图像对、采集循环及可拆分等待检查共享取消令牌；单次 OpenCV 计算或正在执行的 SDK 调用需返回后才可停止，不能保证立即退出。取消不删除已经保存的图像，也不将未完整采集视为成功。
 
 ### 16.5 日志与错误
 
@@ -792,7 +810,7 @@ Release 链接并部署匹配的 Release Qt/VTK，Debug 使用匹配的 Debug �
 
 只有 Debug 导入库时，不能直接让 Release 链接它；应提供兼容的 Release 库，或明确允许替代显示。在本项目具备兼容 Release DLL 时可走现有导入库生成逻辑，仍需验证实际模块。
 
-VTK 不可用时的行为按配置明确区分：要求可用则失败，允许替代则保留算法与导出能力。更换 VTK/Qt/PCL 后同步更新环境配置、本文及有关测试说明。
+VTK 不可用时的行为按配置明确区分：要求可用则失败，允许替代则保留算法与导出能力。更换 VTK 或 Qt 后同步更新环境配置、本文及有关测试说明。
 
 ### 16.9 代码审查检查项
 

@@ -122,11 +122,12 @@ std::vector<cv::Mat> readImages(const std::vector<std::string>& paths)
 std::vector<CalibrationImageObservation> detectCalibrationImageCorners(
     const std::vector<std::string>& paths,
     const cv::Size& boardSize,
-    const std::string& cameraName)
+    const std::string& cameraName, CancellationToken cancellation)
 {
     std::vector<CalibrationImageObservation> observations;
     observations.reserve(paths.size());
     for (size_t i = 0; i < paths.size(); ++i) {
+        cancellation.check();
         CalibrationImageObservation observation;
         observation.imageNumber = static_cast<int>(i + 1);
         observation.gray = toGray(cv::imread(paths[i], cv::IMREAD_COLOR));
@@ -212,8 +213,9 @@ std::string chessboardHint(const cv::Size& boardSize)
 
 } // namespace
 
-CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) const
+CalibrationResult CalibrationService::calibrate(const CalibrationInput& input, CancellationToken cancellation) const
 {
+    cancellation.check();
     Logger::instance().info("Calibration", "Starting stereo calibration.");
     const auto calibrationStart = std::chrono::steady_clock::now();
 
@@ -231,10 +233,10 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     std::vector<std::string> pairedLeft(leftPaths.begin(), leftPaths.begin() + pairCount);
     std::vector<std::string> pairedRight(rightPaths.begin(), rightPaths.begin() + pairCount);
     const auto cornerStart = std::chrono::steady_clock::now();
-    auto leftObservationFuture = std::async(std::launch::async, [pairedLeft, boardSize = input.boardSize]() {
-        return detectCalibrationImageCorners(pairedLeft, boardSize, "Left");
+    auto leftObservationFuture = std::async(std::launch::async, [pairedLeft, boardSize = input.boardSize, cancellation]() {
+        return detectCalibrationImageCorners(pairedLeft, boardSize, "Left", cancellation);
     });
-    const auto rightObservations = detectCalibrationImageCorners(pairedRight, input.boardSize, "Right");
+    const auto rightObservations = detectCalibrationImageCorners(pairedRight, input.boardSize, "Right", cancellation);
     const auto leftObservations = leftObservationFuture.get();
     const auto cornerEnd = std::chrono::steady_clock::now();
     Logger::instance().info(
@@ -249,6 +251,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     }
 
     // 先分别完成左右单目标定，得到两台相机各自的内参和畸变参数。
+    cancellation.check();
     const auto singleCalibrationStart = std::chrono::steady_clock::now();
     auto leftCalibFuture = std::async(std::launch::async, [this, &input, &leftObservations, leftImageSize, pairCount]() {
         return calibrateSingleCamera(
@@ -275,6 +278,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
         "Single-camera calibration finished, elapsedMs=" +
             std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(singleCalibrationEnd - singleCalibrationStart).count()));
 
+    cancellation.check();
     std::vector<std::vector<cv::Point3f>> stereoObjectPoints;
     std::vector<std::vector<cv::Point2f>> leftImagePoints;
     std::vector<std::vector<cv::Point2f>> rightImagePoints;
@@ -340,6 +344,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
     result.failedPairs = failures;
 
     cv::Size imageSize = leftImageSize;
+    cancellation.check();
     const auto stereoCalibrationStart = std::chrono::steady_clock::now();
     // 在已知左右内参的基础上求解双目旋转、平移、本质矩阵和基础矩阵。
     try {
@@ -376,6 +381,7 @@ CalibrationResult CalibrationService::calibrate(const CalibrationInput& input) c
         "Calibration",
         "Calibration total elapsedMs=" +
             std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(calibrationEnd - calibrationStart).count()));
+    cancellation.check();
     if (!input.outputFile.empty()) {
         saveCalibration(input.outputFile, result);
     }

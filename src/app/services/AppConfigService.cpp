@@ -17,6 +17,8 @@ QMap<QString, QVector<ConfigEntry>> definitions(const AppProjectConfig& config)
         result[key.section('/', 0, 0) + ".ini"].append({key, value, comment});
     };
     add("paths/outputDirectory", QString::fromStdString(config.outputDirectory), QString::fromUtf8("采集和算法结果输出目录；相对路径以项目目录为基准。"));
+    add("paths/laserExtractionDirectory", QString::fromStdString(config.laserExtractionDirectory),
+        QString::fromUtf8("激光线提取预览图输出目录；相对路径以项目目录为基准。"));
     add("calibration/boardWidth", config.calibrationInput.boardSize.width, QString::fromUtf8("棋盘格横向内角点数量，范围 2～100。"));
     add("calibration/boardHeight", config.calibrationInput.boardSize.height, QString::fromUtf8("棋盘格纵向内角点数量，范围 2～100。"));
     add("calibration/squareWidth", config.calibrationInput.squareSize.width, QString::fromUtf8("棋盘格单格宽度，单位毫米，范围 0.001～10000。"));
@@ -41,6 +43,8 @@ QMap<QString, QVector<ConfigEntry>> definitions(const AppProjectConfig& config)
     add("reconstruction/removeEndpoints", config.laserConfig.removeEndPoints, QString::fromUtf8("是否删除中心线端点：true=删除，false=保留。"));
     add("reconstruction/removeEndpointCount", config.laserConfig.removeEndPointCount, QString::fromUtf8("每端删除的点数，范围 0～10000。"));
     add("reconstruction/matchDistance", config.matchDistanceThreshold, QString::fromUtf8("双目匹配距离阈值，范围 0.0001～100。"));
+    add("reconstruction/saveLaserExtractionImages", config.saveLaserExtractionImages,
+        QString::fromUtf8("是否在重建时保存并加载左右激光线预览图。"));
     add("acquisition/exposureTime", acquisition.exposureTime, QString::fromUtf8("左右相机曝光时间，单位微秒，范围 1～10000000。"));
     add("acquisition/useHardwareTrigger", acquisition.useHardwareTrigger, QString::fromUtf8("重建采集模式：true=硬触发，false=软触发；标定和预览自由取流。"));
     add("acquisition/triggerSourceLine", acquisition.triggerSourceLine, QString::fromUtf8("相机外部触发线编号，范围 0～5。"));
@@ -177,6 +181,7 @@ AppProjectConfig AppConfigService::load() const
         config.calibrationFile.clear();
     }
     config.outputDirectory = readString(settings, "paths/outputDirectory", "output");
+    config.laserExtractionDirectory = readString(settings, "paths/laserExtractionDirectory", "output/LaserExtraction");
     config.calibrationInput.leftDirectory = config.leftCalibrationDirectory;
     config.calibrationInput.rightDirectory = config.rightCalibrationDirectory;
     config.calibrationInput.outputFile = config.calibrationFile;
@@ -218,6 +223,7 @@ AppProjectConfig AppConfigService::load() const
     config.laserConfig.removeEndPoints = settings.value("reconstruction/removeEndpoints", false).toBool();
     config.laserConfig.removeEndPointCount = settings.value("reconstruction/removeEndpointCount", 10).toInt();
     config.matchDistanceThreshold = settings.value("reconstruction/matchDistance", 0.5).toDouble();
+    config.saveLaserExtractionImages = settings.value("reconstruction/saveLaserExtractionImages", false).toBool();
     auto& acquisition = config.acquisitionParameters;
     acquisition.exposureTime = settings.value("acquisition/exposureTime", acquisition.exposureTime).toDouble();
     acquisition.useHardwareTrigger = settings.value("acquisition/useHardwareTrigger", acquisition.useHardwareTrigger).toBool();

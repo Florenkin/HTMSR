@@ -1,0 +1,42 @@
+# 发布目录只包含可运行程序、插件、配置模板和运行依赖。
+# 不复制构建目录中的测试程序、缓存或库文件。
+if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+    include(InstallRequiredSystemLibraries)
+    if(MSVC AND NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+        message(FATAL_ERROR "Current compiler redistributable runtime not found; install the matching MSVC runtime tools.")
+    endif()
+    find_program(HTMSR_PACKAGE_DUMPBIN dumpbin REQUIRED)
+    set(HTMSR_PACKAGE_SEARCH_DIRS "${HTMSR_QT_BIN_DIR};${HIK_MVS_RUNTIME_DIR}")
+    foreach(dep IN LISTS OpenCV_LIBS)
+        if(TARGET "${dep}")
+            get_target_property(dep_file "${dep}" IMPORTED_LOCATION_RELEASE)
+            if(dep_file)
+                get_filename_component(dep_dir "${dep_file}" DIRECTORY)
+                list(APPEND HTMSR_PACKAGE_SEARCH_DIRS "${dep_dir}")
+            endif()
+        endif()
+    endforeach()
+    foreach(dep IN LISTS HTMSR_VIEWER_RUNTIME_FILES)
+        get_filename_component(dep_dir "${dep}" DIRECTORY)
+        list(APPEND HTMSR_PACKAGE_SEARCH_DIRS "${dep_dir}")
+    endforeach()
+    list(REMOVE_DUPLICATES HTMSR_PACKAGE_SEARCH_DIRS)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallRuntime.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/InstallRuntime.cmake" @ONLY)
+    install(TARGETS htmsr_app RUNTIME DESTINATION .)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" README.md DESTINATION .)
+    install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/InstallRuntime.cmake")
+    install(DIRECTORY config/defaults/ DESTINATION config/defaults)
+    install(FILES config/README.md DESTINATION config)
+    add_custom_target(distribute
+        COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_CURRENT_BINARY_DIR}"
+            --prefix "${CMAKE_SOURCE_DIR}/out/package/HTMSR"
+        DEPENDS htmsr_app USES_TERMINAL
+        COMMENT "Assembling portable HTMSR package")
+    set(CPACK_GENERATOR ZIP)
+    set(CPACK_PACKAGE_NAME HTMSR)
+    set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+    set(CPACK_PACKAGE_DIRECTORY "${CMAKE_SOURCE_DIR}/out/package")
+    include(CPack)
+endif()

@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "configurePresets": [
     {
       "name": "vs2022-x64-debug",
@@ -8,7 +8,8 @@
       "binaryDir": "${sourceDir}/out/build/vs2022-x64-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HTMSR_BUILD_CAPTURE_TESTS": "ON"
       },
       "architecture": {
         "value": "x64",
@@ -34,6 +35,64 @@
     {
       "name": "release",
       "configurePreset": "vs2022-x64-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "vs2022-x64-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "vs2022-x64-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "verify-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "vs2022-x64-debug"
+        },
+        {
+          "type": "build",
+          "name": "debug"
+        },
+        {
+          "type": "test",
+          "name": "debug"
+        }
+      ]
+    },
+    {
+      "name": "verify-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "vs2022-x64-release"
+        },
+        {
+          "type": "build",
+          "name": "release"
+        },
+        {
+          "type": "test",
+          "name": "release"
+        }
+      ]
     }
   ]
 }

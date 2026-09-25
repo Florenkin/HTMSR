@@ -7,13 +7,17 @@ if(temporary_root STREQUAL "")
 endif()
 string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef test_id)
 set(test_root "${temporary_root}/htmsr-build-config-${test_id}")
-file(MAKE_DIRECTORY "${test_root}/config" "${test_root}/deps/PCL with spaces/cmake"
-    "${test_root}/deps/PCL with spaces/3rdParty/Boost/lib/cmake/Boost-9.8.7"
-    "${test_root}/deps/PCL with spaces/3rdParty/Qhull/lib/cmake/Qhull")
+file(MAKE_DIRECTORY "${test_root}/config"
+    "${test_root}/deps/Qt with spaces/lib/cmake/Qt5"
+    "${test_root}/deps/OpenCV/lib"
+    "${test_root}/deps/VTK-release/cmake"
+    "${test_root}/deps/VTK-debug/cmake"
+    "${test_root}/deps/Eigen")
 set(HTMSR_ENVIRONMENT_FILE "${test_root}/config/environment.ini")
 set(CMAKE_BUILD_TYPE Release)
 set(Qt5_DIR "old-computer/Qt" CACHE PATH "Stale preset" FORCE)
-set(Boost_DIR "old-computer/Boost" CACHE PATH "Stale package result" FORCE)
+set(Qt5Core_DIR "old-computer/QtCore" CACHE PATH "Stale package result" FORCE)
+set(PCL_DIR "old-computer/unused-point-cloud-library" CACHE PATH "Obsolete dependency result" FORCE)
 set(CMAKE_PREFIX_PATH "old-computer/prefix" CACHE STRING "Stale preset" FORCE)
 set(CMAKE_CXX_COMPILER "compiler-must-be-retained" CACHE STRING "Toolchain sentinel" FORCE)
 file(WRITE "${HTMSR_ENVIRONMENT_FILE}" [=[
@@ -21,7 +25,6 @@ file(WRITE "${HTMSR_ENVIRONMENT_FILE}" [=[
 [build]
 Qt5_DIR=../deps/Qt with spaces/lib/cmake/Qt5
 OpenCV_DIR=../deps/OpenCV/lib
-PCL_DIR=../deps/PCL with spaces/cmake
 VTK_DIR_DEBUG=../deps/VTK-debug/cmake
 VTK_DIR=../deps/VTK-release/cmake
 HTMSR_EIGEN_INCLUDE_DIR=../deps/Eigen
@@ -36,24 +39,24 @@ if(NOT Qt5_DIR STREQUAL "${test_root}/deps/Qt with spaces/lib/cmake/Qt5")
     message(FATAL_ERROR "Config did not override the preset or resolve a relative path with spaces: ${Qt5_DIR}")
 endif()
 foreach(expected_prefix
-    "${test_root}/deps/PCL with spaces"
-    "${test_root}/deps/PCL with spaces/3rdParty/Boost/lib/cmake/Boost-9.8.7"
-    "${test_root}/deps/PCL with spaces/3rdParty/Qhull/lib/cmake/Qhull"
-    "${test_root}/deps/VTK-release/cmake")
+    "${test_root}/deps/Qt with spaces/lib/cmake/Qt5"
+    "${test_root}/deps/OpenCV/lib"
+    "${test_root}/deps/VTK-release/cmake"
+    "${test_root}/deps/Eigen")
     if(NOT expected_prefix IN_LIST CMAKE_PREFIX_PATH)
         message(FATAL_ERROR "Missing automatically derived prefix: ${expected_prefix}")
     endif()
 endforeach()
-if(DEFINED Boost_DIR OR CMAKE_PREFIX_PATH MATCHES "old-computer" OR DEFINED extraDllDirectories)
+if(DEFINED Qt5Core_DIR OR DEFINED PCL_DIR OR CMAKE_PREFIX_PATH MATCHES "old-computer" OR DEFINED extraDllDirectories)
     message(FATAL_ERROR "Stale package cache/preset or runtime section leaked into build settings")
 endif()
 if(NOT CMAKE_CXX_COMPILER STREQUAL "compiler-must-be-retained")
     message(FATAL_ERROR "Dependency refresh altered the compiler toolchain")
 endif()
 set(release_fingerprint "${HTMSR_BUILD_ENVIRONMENT_FINGERPRINT}")
-set(Boost_DIR "keep-unchanged-environment" CACHE PATH "Package result" FORCE)
+set(Qt5Core_DIR "keep-unchanged-environment" CACHE PATH "Package result" FORCE)
 include("${environment_loader}")
-if(NOT Boost_DIR STREQUAL "keep-unchanged-environment")
+if(NOT Qt5Core_DIR STREQUAL "keep-unchanged-environment")
     message(FATAL_ERROR "Unchanged configuration needlessly cleared package cache")
 endif()
 
@@ -62,22 +65,22 @@ include("${environment_loader}")
 if(HTMSR_ENABLE_VTK_VIEWER OR NOT VTK_DIR STREQUAL "${test_root}/deps/VTK-debug/cmake")
     message(FATAL_ERROR "Debug overrides depend on INI key order")
 endif()
-if(DEFINED Boost_DIR OR HTMSR_BUILD_ENVIRONMENT_FINGERPRINT STREQUAL release_fingerprint)
+if(DEFINED Qt5Core_DIR OR HTMSR_BUILD_ENVIRONMENT_FINGERPRINT STREQUAL release_fingerprint)
     message(FATAL_ERROR "Build configuration change did not refresh dependency cache")
 endif()
 
-# 换依赖目录后，只改 config：旧 Boost 查找结果失效，额外前缀和空 Debug 覆盖生效。
+# 换依赖目录后只改 config：旧查找结果失效，额外前缀和空 Debug 覆盖生效。
 file(WRITE "${HTMSR_ENVIRONMENT_FILE}" [=[
 [build]
 Qt5_DIR=../new-deps/Qt/lib/cmake/Qt5
 OpenCV_DIR=../new-deps/OpenCV/lib
-PCL_DIR=../new-deps/PCL/cmake
 VTK_DIR=../new-deps/VTK/cmake
 VTK_DIR_DEBUG=
+HTMSR_EIGEN_INCLUDE_DIR=../new-deps/Eigen
 CMAKE_PREFIX_PATH=../extra one;../extra two
 HTMSR_ENABLE_VTK_VIEWER=false
 ]=])
-set(Boost_DIR "old-computer/Boost" CACHE PATH "Stale result" FORCE)
+set(OpenCV_FOUND TRUE CACHE BOOL "Stale result" FORCE)
 include("${environment_loader}")
 foreach(expected_prefix "${test_root}/extra one" "${test_root}/extra two"
     "${test_root}/new-deps/Qt/lib/cmake/Qt5" "${test_root}/new-deps/VTK/cmake")
@@ -85,7 +88,7 @@ foreach(expected_prefix "${test_root}/extra one" "${test_root}/extra two"
         message(FATAL_ERROR "Config-only path change or semicolon list failed: ${expected_prefix}")
     endif()
 endforeach()
-if(DEFINED Boost_DIR OR CMAKE_PREFIX_PATH MATCHES "deps/PCL with spaces" OR CMAKE_PREFIX_PATH MATCHES "VTK-debug")
+if(DEFINED OpenCV_FOUND OR CMAKE_PREFIX_PATH MATCHES "deps/VTK-release" OR CMAKE_PREFIX_PATH MATCHES "VTK-debug")
     message(FATAL_ERROR "Removed dependency paths survived in cache/search prefixes")
 endif()
 

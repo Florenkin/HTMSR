@@ -34,6 +34,7 @@ class ConfigFiles {
 public:
     // 测试或便携部署可通过 HTMSR_CONFIG_DIR 指定独立目录。
     static QString directory();
+    static QString selectDirectory(const QString& executableDirectory, const QString& developmentDirectory);
     static QString path(const QString& relativePath);
     static QString resolvePath(const QString& value);
     static QString environmentPath(const QString& key);

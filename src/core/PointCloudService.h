@@ -34,7 +34,7 @@ public:
     void saveTxt(const std::string& filename, const std::vector<Eigen::Vector3d>& points, bool logSave = true) const;
 
     /*
-        函数功能：将三维点云保存为 PCL pcd 文件
+        函数功能：将三维点云保存为标准二进制 PCD 文件
         输入：
             filename：输出 pcd 文件路径
             points：待保存的三维点集合

@@ -125,6 +125,8 @@ private:
     QLineEdit* rightCalibrationEdit_ = nullptr;
     QLineEdit* leftReconstructionEdit_ = nullptr;
     QLineEdit* rightReconstructionEdit_ = nullptr;
+    QLineEdit* laserExtractionDirectoryEdit_ = nullptr;
+    QCheckBox* saveLaserExtractionImagesCheck_ = nullptr;
     QLineEdit* calibrationFileEdit_ = nullptr;
     QSpinBox* boardWidthSpin_ = nullptr;
     QSpinBox* boardHeightSpin_ = nullptr;

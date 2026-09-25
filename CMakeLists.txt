@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.25)
 
 # 分类配置中的依赖路径是唯一来源；构建预设只指定构建类型和输出目录。
 include(cmake/HtmsrEnvironment.cmake)
@@ -9,102 +9,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded PCL/VTK point cloud viewer" ON)
+option(HTMSR_ENABLE_VTK_VIEWER "Build the embedded VTK point cloud viewer" ON)
 option(HTMSR_REQUIRE_VTK_VIEWER "Fail configuration if the embedded VTK Qt point cloud viewer cannot be enabled" OFF)
 option(HTMSR_ENABLE_HIK_CAMERA "Build Hikrobot MVS camera acquisition support" OFF)
-
-function(htmsr_normalize_compile_definitions output_variable)
-    set(normalized_definitions)
-    foreach(definition IN LISTS ARGN)
-        if(NOT definition)
-            continue()
-        endif()
-
-        string(REPLACE " " ";" definition_parts "${definition}")
-        foreach(definition_part IN LISTS definition_parts)
-            if(NOT definition_part)
-                continue()
-            endif()
-
-            if(definition_part MATCHES "^\\$<")
-                list(APPEND normalized_definitions "${definition_part}")
-                continue()
-            endif()
-
-            string(REGEX REPLACE "^-D" "" definition_part "${definition_part}")
-            if(definition_part MATCHES "-D")
-                string(REPLACE "-D" ";" split_definitions "${definition_part}")
-            else()
-                set(split_definitions "${definition_part}")
-            endif()
-
-            foreach(split_definition IN LISTS split_definitions)
-                if(NOT split_definition)
-                    continue()
-                endif()
-
-                if(NOT split_definition MATCHES "^[A-Za-z_][A-Za-z0-9_]*(=.*)?$")
-                    message(FATAL_ERROR
-                        "Invalid compile definition detected: '${split_definition}'. "
-                        "Use target_compile_definitions(target PRIVATE MACRO or MACRO=value), "
-                        "never pass joined command-line fragments such as -DMACRO-DOTHER.")
-                endif()
-
-                list(APPEND normalized_definitions "${split_definition}")
-            endforeach()
-        endforeach()
-    endforeach()
-
-    if(normalized_definitions)
-        list(REMOVE_DUPLICATES normalized_definitions)
-    endif()
-    set(${output_variable} "${normalized_definitions}" PARENT_SCOPE)
-endfunction()
-
-function(htmsr_normalize_compile_options output_variable)
-    set(normalized_options)
-    foreach(option IN LISTS ARGN)
-        if(NOT option)
-            continue()
-        endif()
-
-        if(option MATCHES "^-D")
-            htmsr_normalize_compile_definitions(split_definitions "${option}")
-            foreach(split_definition IN LISTS split_definitions)
-                list(APPEND normalized_options "-D${split_definition}")
-            endforeach()
-        else()
-            list(APPEND normalized_options "${option}")
-        endif()
-    endforeach()
-
-    if(normalized_options)
-        list(REMOVE_DUPLICATES normalized_options)
-    endif()
-    set(${output_variable} "${normalized_options}" PARENT_SCOPE)
-endfunction()
-
-function(htmsr_sanitize_imported_compile_definitions)
-    foreach(imported_target IN LISTS ARGN)
-        if(NOT TARGET "${imported_target}")
-            continue()
-        endif()
-
-        get_target_property(imported_definitions "${imported_target}" INTERFACE_COMPILE_DEFINITIONS)
-        if(imported_definitions)
-            htmsr_normalize_compile_definitions(clean_definitions ${imported_definitions})
-            set_target_properties("${imported_target}" PROPERTIES
-                INTERFACE_COMPILE_DEFINITIONS "${clean_definitions}")
-        endif()
-
-        get_target_property(imported_options "${imported_target}" INTERFACE_COMPILE_OPTIONS)
-        if(imported_options)
-            htmsr_normalize_compile_options(clean_options ${imported_options})
-            set_target_properties("${imported_target}" PROPERTIES
-                INTERFACE_COMPILE_OPTIONS "${clean_options}")
-        endif()
-    endforeach()
-endfunction()
 
 function(htmsr_generate_msvc_import_lib_from_dll output_variable dll_path library_name)
     set(${output_variable} "" PARENT_SCOPE)
@@ -212,20 +119,6 @@ if(HTMSR_EIGEN_INCLUDE_DIR)
 else()
     find_package(Eigen3 REQUIRED)
 endif()
-# PCL 1.12.1 的 Windows 安装包会在 PCLConfig.cmake 中使用 string(APPEND)
-# 追加 BOOST_DEFINITIONS。如果 Boost 包已经设置过同名变量，两个 -D 片段
-# 会被粘成 BOOST_ALL_NO_LIB-DBOOST_ALL_NO_LIB，导致 VS IntelliSense 报 E0992。
-# 这里在进入 PCL 配置前清空兼容变量，保留后续 target 级宏定义作为唯一来源。
-unset(BOOST_DEFINITIONS)
-find_package(PCL REQUIRED COMPONENTS common io)
-htmsr_normalize_compile_definitions(HTMSR_PCL_DEFINITIONS ${PCL_DEFINITIONS})
-set(PCL_DEFINITIONS "${HTMSR_PCL_DEFINITIONS}")
-htmsr_sanitize_imported_compile_definitions(${PCL_LIBRARIES})
-
-set(HTMSR_PCL_CORE_LINK_LIBRARIES)
-foreach(pcl_library IN LISTS PCL_LIBRARIES)
-    list(APPEND HTMSR_PCL_CORE_LINK_LIBRARIES "$<LINK_ONLY:${pcl_library}>")
-endforeach()
 find_package(Qt5 REQUIRED COMPONENTS Widgets Concurrent OpenGL)
 
 add_library(htmsr_config src/app/services/ConfigFiles.cpp)
@@ -253,21 +146,16 @@ target_include_directories(htmsr_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${OpenCV_INCLUDE_DIRS}
-    PRIVATE
-        ${PCL_INCLUDE_DIRS}
 )
 
 target_link_libraries(htmsr_core
     PUBLIC
         Eigen3::Eigen
         ${OpenCV_LIBS}
-    PRIVATE
-        ${HTMSR_PCL_CORE_LINK_LIBRARIES}
 )
 
 target_compile_definitions(htmsr_core
     PUBLIC
-        BOOST_ALL_NO_LIB
         NOMINMAX
 )
 
@@ -288,8 +176,7 @@ set(HTMSR_APP_SOURCES
     src/app/services/AppConfigService.cpp
     src/app/services/FileLogSink.cpp
     src/app/services/CalibrationCaptureSessionService.cpp
-    src/app/services/IntegratedCalibrationCaptureService.cpp
-    src/app/services/IntegratedScanService.cpp
+    src/app/services/LaserExtractionStorage.cpp
     src/app/services/QtLogSink.cpp
     src/app/services/ReconstructionCaptureSessionService.cpp
     src/app/services/ReconstructionStorage.cpp
@@ -299,7 +186,9 @@ set(HTMSR_APP_SOURCES
     src/app/ui/ImageViewWidget.cpp
     src/app/ui/LogPanel.cpp
     src/app/ui/MainWindow.cpp
-    src/app/ui/ParameterPanel.cpp
+    src/app/ui/MainWindowWorkflow.cpp
+    src/app/ui/MainWindowCommands.cpp
+    src/app/ui/MainWindowPreview.cpp
     src/app/ui/PointCloudViewWidget.cpp
     src/app/ui/SerialCommandPackWidget.cpp
     src/app/ui/ZoomableImageView.cpp
@@ -350,12 +239,14 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
 
         add_executable(htmsr_serial_diagnostics_tests
             test/SerialDiagnosticsTests.cpp
+            test/CancellationTests.cpp
             test/AppConfigPersistenceTests.cpp
             test/CalibrationWorkflowTests.cpp
             test/ReconstructionStorageTests.cpp
             test/ResultExportTests.cpp
             src/app/services/AppConfigService.cpp
             src/app/services/CalibrationCaptureSessionService.cpp
+            src/app/services/LaserExtractionStorage.cpp
             src/app/services/ReconstructionCaptureSessionService.cpp
             src/app/services/ReconstructionStorage.cpp
             src/app/services/ResultExportService.cpp
@@ -365,6 +256,10 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
             src/app/acquisition/AcquisitionTypes.cpp
             src/app/ui/AcquisitionPanel.cpp
             src/app/ui/AcquisitionPanel.h
+            src/app/ui/CaptureReviewWidget.cpp
+            src/app/ui/CaptureReviewWidget.h
+            src/app/ui/ZoomableImageView.cpp
+            src/app/ui/ZoomableImageView.h
         )
         target_include_directories(htmsr_serial_diagnostics_tests PRIVATE src)
         target_link_libraries(htmsr_serial_diagnostics_tests PRIVATE htmsr_core htmsr_config Qt5::Widgets)
@@ -428,20 +323,9 @@ endif()
 
 add_executable(htmsr_app WIN32 ${HTMSR_APP_SOURCES})
 
-if(WIN32 AND OPENNI2_LIBRARY)
-    get_filename_component(HTMSR_OPENNI2_LIBRARY_DIRECTORY "${OPENNI2_LIBRARY}" DIRECTORY)
-    set(HTMSR_OPENNI2_RUNTIME "${HTMSR_OPENNI2_LIBRARY_DIRECTORY}/../Redist/OpenNI2.dll")
-    if(EXISTS "${HTMSR_OPENNI2_RUNTIME}")
-        add_custom_command(TARGET htmsr_app POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HTMSR_OPENNI2_RUNTIME}" "$<TARGET_FILE_DIR:htmsr_app>"
-            COMMENT "Copying configured OpenNI2 runtime")
-    endif()
-endif()
-
 target_include_directories(htmsr_app
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${PCL_INCLUDE_DIRS}
 )
 
 target_link_libraries(htmsr_app
@@ -494,7 +378,7 @@ if(EXISTS "${HTMSR_WINDEPLOYQT_EXECUTABLE}")
             "$<TARGET_FILE:htmsr_app>"
         COMMENT "Deploying Qt runtime with windeployqt")
 else()
-    message(WARNING "windeployqt.exe was not found. Visual Studio may rely on PATH to locate Qt runtime DLLs.")
+    message(STATUS "windeployqt not installed; using explicit Qt deployment and package dependency scanning.")
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -665,17 +549,6 @@ if(HTMSR_ENABLE_VTK_VIEWER)
         if(WIN32)
             set(HTMSR_VIEWER_RUNTIME_PATTERNS)
 
-            if(PCL_DIR)
-                get_filename_component(HTMSR_PCL_CMAKE_DIR "${PCL_DIR}" ABSOLUTE)
-                get_filename_component(HTMSR_PCL_ROOT_DIR "${HTMSR_PCL_CMAKE_DIR}" DIRECTORY)
-                list(APPEND HTMSR_VIEWER_RUNTIME_PATTERNS
-                    "${HTMSR_PCL_ROOT_DIR}/bin/*.dll"
-                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/FLANN/bin/*.dll"
-                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/Qhull/bin/*.dll"
-                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/Boost/lib/*.dll"
-                    "${HTMSR_PCL_ROOT_DIR}/3rdParty/OpenNI2/Redist/*.dll")
-            endif()
-
             if(VTK_DIR)
                 get_filename_component(HTMSR_VTK_CMAKE_DIR "${VTK_DIR}" ABSOLUTE)
                 get_filename_component(HTMSR_VTK_CMAKE_PARENT_DIR "${HTMSR_VTK_CMAKE_DIR}" DIRECTORY)
@@ -715,3 +588,5 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "Source" FILES
     src/core/ReconstructionService.cpp
     src/app/main.cpp
 )
+
+include(cmake/HtmsrPackaging.cmake)

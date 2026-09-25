@@ -136,8 +136,9 @@ void logCapturedFrameProgress(int frameIndex, int frameCount, const FramePair& p
 
 AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
     const IntegratedScanConfig& inputConfig,
-    ProgressCallback progressCallback) const
+    ProgressCallback progressCallback, CancellationToken cancellation) const
 {
+    cancellation.check();
     IntegratedScanConfig config = inputConfig;
     if (config.stereoCamera.frameCount <= 0) {
         throw std::runtime_error("Reconstruction capture frame count must be greater than zero.");
@@ -171,6 +172,7 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
         Logger::instance().warning("ReconstructionCapture", "Using mock acquisition provider. Galvo and laser commands will not be sent.");
         MockAcquisitionProvider provider(config.stereoCamera.frameCount);
         for (int frameIndex = 0; frameIndex < config.stereoCamera.frameCount && provider.hasNext(); ++frameIndex) {
+            cancellation.check();
             FramePair pair = provider.next();
             saveFramePair(result, pair, frameIndex);
             if (progressCallback) {
@@ -186,7 +188,7 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
 
         try {
             GalvoLaserCaptureGuard laserGuard(galvoController);
-            const auto motion = prepareGalvoForCapture(galvoController, config);
+            const auto motion = prepareGalvoForCapture(galvoController, config, [cancellation](int ms) { cancellation.wait(ms); });
             config.galvo.stepAngleDeg = motion.stepAngleDeg;
             config.galvo.autoRotationAngleDeg = motion.totalRotationAngleDeg;
             config.totalRotationAngleDeg = motion.totalRotationAngleDeg;
@@ -239,12 +241,14 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
                 }
             }
 
+            cancellation.check();
             laserGuard.turnOn();
-            std::this_thread::sleep_for(std::chrono::milliseconds(std::max(200, config.galvo.continuousCaptureWaitMs)));
+            cancellation.wait(std::max(200, config.galvo.continuousCaptureWaitMs));
 
             // 无论相机由外部脉冲还是自由取流，本次重建都必须让振镜以步进角、总旋转角和时间间隔连续扫描。
             // 相机抓图模式仅改变取帧方式，不能把“方向”命令当作每帧的单步运动命令。
             const auto startScan = [&]() {
+                cancellation.check();
                 const auto continuousCaptureResult = galvoController.startContinuousCapture();
                 if (!continuousCaptureResult.success) {
                     throw std::runtime_error(
@@ -265,6 +269,7 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
                 std::ostringstream frameAudit;
                 frameAudit << "index\tleft_frame_number\tright_frame_number\tleft_trigger_count\tright_trigger_count\tleft_host_timestamp\tright_host_timestamp\n";
                 HardwareCaptureOptions options;
+                options.cancellation = cancellation;
                 options.expectedFrameCount = cameraConfig.frameCount;
                 options.frameTimeoutMs = std::max(cameraConfig.leftParameters.grabTimeoutMs, cameraConfig.rightParameters.grabTimeoutMs);
                 HardwareTriggeredStereoCapture receiver;
@@ -331,7 +336,7 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
                 auto nextSoftwareCapture = std::chrono::steady_clock::now() +
                     std::chrono::milliseconds(std::max(1, galvoConfig.continuousCaptureWaitMs));
                 for (int frameIndex = 0; frameIndex < config.stereoCamera.frameCount; ++frameIndex) {
-                    std::this_thread::sleep_until(nextSoftwareCapture);
+                    cancellation.wait(static_cast<int>(std::max<long long>(0, std::chrono::duration_cast<std::chrono::milliseconds>(nextSoftwareCapture - std::chrono::steady_clock::now()).count())));
                     nextSoftwareCapture += std::chrono::milliseconds(std::max(1, galvoConfig.captureIntervalMs));
                     FramePair pair;
                     pair.frameIndex = frameIndex;
@@ -375,6 +380,7 @@ AcquisitionSessionResult ReconstructionCaptureSessionService::capture(
 #endif
     }
 
+    cancellation.check();
     if (result.message.empty()) {
         result.success = result.capturedFrameCount == config.stereoCamera.frameCount && result.failedFrameCount == 0;
         result.message = result.success

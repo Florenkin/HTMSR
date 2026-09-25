@@ -1,4 +1,5 @@
 #pragma once
+#include "core/Cancellation.h"
 
 #include "core/Types.h"
 
@@ -18,7 +19,7 @@ public:
         输出：
             返回值：双目标定结果，包含左右相机内参、畸变参数、双目外参和误差统计
     */
-    CalibrationResult calibrate(const CalibrationInput& input) const;
+    CalibrationResult calibrate(const CalibrationInput& input, CancellationToken cancellation = {}) const;
 
     /*
         函数功能：从 OpenCV yml/yaml 文件中读取双目标定结果
