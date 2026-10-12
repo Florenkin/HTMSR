@@ -1,0 +1,20 @@
+<RCC>
+  <qresource prefix="/htmsr">
+    <file>theme/light.qss</file>
+    <file>icons/app.svg</file>
+    <file>icons/refresh.svg</file>
+    <file>icons/camera.svg</file>
+    <file>icons/capture.svg</file>
+    <file>icons/calibration.svg</file>
+    <file>icons/open.svg</file>
+    <file>icons/export.svg</file>
+    <file>icons/scan.svg</file>
+    <file>icons/cloud.svg</file>
+    <file>icons/laser.svg</file>
+    <file>icons/command.svg</file>
+    <file>icons/panel.svg</file>
+    <file>icons/log.svg</file>
+    <file>icons/fit.svg</file>
+    <file>icons/help.svg</file>
+  </qresource>
+</RCC>

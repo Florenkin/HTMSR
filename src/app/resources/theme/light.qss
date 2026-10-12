@@ -1,0 +1,105 @@
+QMainWindow { background: #eef2f7; }
+QDockWidget { color: #29435e; font-weight: 500; }
+QDockWidget::title {
+    background: #e6edf5;
+    padding: 7px 10px;
+    border-bottom: 1px solid #d3deeb;
+}
+QDockWidget::close-button, QDockWidget::float-button { padding: 3px; }
+QTabWidget::pane { background: #ffffff; border: 1px solid #dce4ed; }
+QTabWidget QTabBar::tab {
+    color: #526477;
+    background: #eef2f7;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    padding: 7px 14px;
+    min-height: 18px;
+}
+QTabWidget QTabBar::tab:selected {
+    color: #1765a5;
+    background: #ffffff;
+    border-bottom: 2px solid #267bbd;
+}
+QTabWidget QTabBar::tab:hover { background: #e4eff9; }
+QTabWidget QTabBar::tab:disabled { color: #a3adba; }
+QGroupBox {
+    color: #29435e;
+    background: #ffffff;
+    border: 1px solid #dce4ed;
+    border-radius: 5px;
+    margin-top: 12px;
+    padding: 12px 8px 8px 8px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 5px;
+}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    color: #283c50;
+    background: #ffffff;
+    border: 1px solid #ccd7e3;
+    border-radius: 3px;
+    padding: 3px 5px;
+    min-height: 20px;
+    selection-background-color: #267bbd;
+    selection-color: #ffffff;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #267bbd; }
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+    background: #f3f5f8; color: #9aa7b4; border-color: #e0e6ee;
+}
+QPushButton {
+    color: #29435e;
+    background: #ffffff;
+    border: 1px solid #ccd7e3;
+    border-radius: 3px;
+    padding: 5px 10px;
+    min-height: 20px;
+}
+QPushButton:hover { background: #eaf3fc; border-color: #8ab4db; }
+QPushButton:pressed { background: #d9eafa; }
+QPushButton:disabled { color: #a3adba; background: #f3f5f8; border-color: #e0e6ee; }
+QPushButton#browsePathButton { padding: 5px 2px; }
+QPushButton#captureCalibrationFrame, QPushButton#calibrateFrames,
+QPushButton#startReconstructionCapture, QPushButton#reconstructFrames {
+    color: #ffffff; background: #267bbd; border-color: #267bbd;
+}
+QPushButton#captureCalibrationFrame:hover, QPushButton#calibrateFrames:hover,
+QPushButton#startReconstructionCapture:hover, QPushButton#reconstructFrames:hover { background: #1b6ca9; }
+QPushButton#captureCalibrationFrame:disabled, QPushButton#calibrateFrames:disabled,
+QPushButton#startReconstructionCapture:disabled, QPushButton#reconstructFrames:disabled {
+    color: #a3adba; background: #f3f5f8; border-color: #e0e6ee;
+}
+SARibbonApplicationButton#htmsrApplicationButton {
+    color: #ffffff; background: #267bbd; border: none; border-radius: 0; padding: 0 10px; min-width: 66px;
+}
+SARibbonApplicationButton#htmsrApplicationButton:hover { background: #1b6ca9; }
+SARibbonApplicationButton#htmsrApplicationButton::menu-indicator { image: none; width: 0; }
+QTableWidget, QTreeWidget, QListWidget {
+    color: #283c50;
+    background: #ffffff;
+    alternate-background-color: #f5f8fc;
+    border: 1px solid #dce4ed;
+    gridline-color: #e6edf5;
+    selection-background-color: #dcecfb;
+    selection-color: #1765a5;
+}
+QHeaderView::section {
+    color: #526477; background: #edf2f8;
+    border: none; border-right: 1px solid #dce4ed; border-bottom: 1px solid #dce4ed;
+    padding: 5px 7px;
+}
+QScrollArea { background: #f5f8fc; border: none; }
+QStatusBar { color: #526477; background: #e6edf5; border-top: 1px solid #d3deeb; }
+QStatusBar::item { border: none; }
+QProgressBar#taskProgress {
+    background: #d8e2ed; border: none; border-radius: 3px; min-height: 6px; max-height: 6px;
+}
+QProgressBar#taskProgress::chunk { background: #267bbd; border-radius: 3px; }
+QMenu { color: #283c50; background: #ffffff; border: 1px solid #ccd7e3; padding: 4px; }
+QMenu::item { padding: 7px 24px 7px 10px; }
+QMenu::item:selected { background: #e4eff9; color: #1765a5; }
+QMenu::item:disabled { color: #a3adba; }
+QToolTip { color: #283c50; background: #ffffff; border: 1px solid #ccd7e3; padding: 5px; }
