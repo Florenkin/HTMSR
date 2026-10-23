@@ -14,8 +14,20 @@
 #include <QVTKOpenGLNativeWidget.h>
 #endif
 
+#if HTMSR_ENABLE_UI_SMOKE_TEST
+namespace htmsr::test {
+int runMainWindowUiSmokeTest(int argc, char** argv);
+}
+#endif
+
 int main(int argc, char* argv[])
 {
+#if HTMSR_ENABLE_UI_SMOKE_TEST
+    // 在正常启动读取配置、创建日志或枚举设备之前进入隔离测试入口。
+    for (int index = 1; index < argc; ++index)
+        if (qstrcmp(argv[index], "--ui-smoke-test") == 0)
+            return htmsr::test::runMainWindowUiSmokeTest(argc, argv);
+#endif
     const QString executablePath = argc > 0 ? QString::fromLocal8Bit(argv[0]) : QString();
     const QString applicationDirectory = executablePath.isEmpty()
         ? QDir::currentPath()

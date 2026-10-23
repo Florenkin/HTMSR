@@ -4,7 +4,7 @@
 namespace htmsr::app {
 using namespace detail;
 
-MainWindow::MainWindow(QWidget* parent)
+MainWindow::MainWindow(QWidget* parent, StartupMode startupMode)
     : SARibbonMainWindow(parent)
 {
     setWindowTitle(QString::fromUtf8("HTMSR · 双目三维扫描"));
@@ -34,6 +34,10 @@ MainWindow::MainWindow(QWidget* parent)
     galvoStatusLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     statusBar()->addPermanentWidget(galvoStatusLabel_, 1);
     statusBar()->addPermanentWidget(progressBar_);
+
+    // 自动回归必须在配置恢复、自动保存及任何设备信号连接之前返回。
+    if (startupMode == StartupMode::InterfaceTest)
+        return;
 
     acquisitionPanel_->setProjectConfig(configService_.load());
     configAutoSave_ = new ConfigAutoSave([this]() {
@@ -136,7 +140,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     if (!shuttingDown_.exchange(true)) {
         acquisitionPanel_->commitPendingEdits();
-        configAutoSave_->flush();
+        if (configAutoSave_)
+            configAutoSave_->flush();
         shutdownCancellation_.request();
         serialCommandPackStopRequested_->store(true);
         livePreviewStopRequested_.store(true);

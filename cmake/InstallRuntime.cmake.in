@@ -55,6 +55,9 @@ foreach(plugin "platforms/qwindows.dll" "styles/qwindowsvistastyle.dll" "iconeng
     endif()
 endforeach()
 # Qt 在运行时加载图片插件，不能仅从 exe 的静态导入表发现。
+if(NOT EXISTS "@HTMSR_QT_PLUGINS_DIR@/imageformats/qsvg.dll")
+    message(FATAL_ERROR "Missing required Qt SVG image plugin for ribbon title-bar controls: @HTMSR_QT_PLUGINS_DIR@/imageformats/qsvg.dll")
+endif()
 file(GLOB image_plugins "@HTMSR_QT_PLUGINS_DIR@/imageformats/*.dll")
 foreach(plugin IN LISTS image_plugins)
     if(NOT plugin MATCHES "d\\.dll$")

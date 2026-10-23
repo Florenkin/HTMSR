@@ -6,6 +6,16 @@
 
 `fakes/MvCameraControl.h` 是海康相机配置测试使用的模拟 SDK 接口头文件。测试使用的图像和点云优先在运行时生成到临时目录；需要保留的截图、日志及结果放在 `out` 下，不混入本目录。
 
+## 窗口按钮回归
+
+`htmsr_ribbon_window_tests` / CTest `ribbon_window_controls`、`ribbon_window_controls_hidpi` 使用与主窗口一致的 SARibbon 无边框标题栏和实际主题，分别在普通缩放及 150% 缩放下验证。只从构建目录加载插件，检查八种正常/悬停/还原 SVG 资源能够被图片解码器读取、三个按钮实际绘制符号、最小化、最大化/还原、外部状态变化，以及关闭请求能够被窗口拒绝或接受。不创建主业务窗口，不访问相机、串口或用户配置。
+
+可加 `--render-preview <输出目录>` 保存正常、最大化、还原后的窗口和按钮截图；加 `--interactive-preview` 并使用 Windows 平台插件可打开独立的硬件隔离验证窗口。
+
+## 单排导航回归
+
+`htmsr_ribbon_navigation_tests` / CTest `ribbon_workspace_navigation`、`ribbon_workspace_navigation_hidpi` 验证顶部单排导航：九个功能区标签、中央重复标签隐藏、五个页面对象保留、标定/重建工作流请求不重复、视图/帮助保留当前数据、程序切页后的双向同步、折叠及窗口宽度变化。使用简单占位页面，不创建业务主窗口或访问硬件。可传 `--render-preview <输出目录>` 保存导航预览，或在 Windows 平台插件下传 `--interactive-preview` 打开独立验证窗口。
+
 ## 点云处理回归
 
 `htmsr_pointcloud_tests` / CTest `pointcloud_processing` 使用生成的几何点云验证体素质心、统计离群点滤波、按轴裁剪、大坐标球拟合及标准直径误差、短粗/长/旋转圆柱、二次/四次高度曲面、双球距离、连通凹陷/凸起、退化点云、取消和中文 PLY/PCD/TXT 文件，也验证二进制 PLY 属性排序与损坏文件头。Qt 离屏验证完整点云索引选择、真实矩形鼠标事件、原始点保留、选区拟合、异步失败结果和多条目合并，以及参数对话框打开期间收到重建结果或清空列表的安全性。可传入 PNG 绝对路径保存页面预览。

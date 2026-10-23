@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.25)
 include(cmake/HtmsrEnvironment.cmake)
 
 project(HTMSR VERSION 0.1.0 LANGUAGES CXX)
+include(cmake/HtmsrMsvcDependencies.cmake)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -201,6 +202,8 @@ set(HTMSR_APP_SOURCES
     src/app/ui/LogPanel.cpp
     src/app/ui/MainWindow.cpp
     src/app/ui/MainWindowRibbon.cpp
+    src/app/ui/RibbonWorkspaceNavigation.cpp
+    src/app/ui/RibbonWorkspaceNavigation.h
     src/app/ui/MainWindowWorkflow.cpp
     src/app/ui/MainWindowCommands.cpp
     src/app/ui/MainWindowPreview.cpp
@@ -216,6 +219,13 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
     find_package(Threads REQUIRED)
     enable_testing()
     add_test(NAME build_environment COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/test/HtmsrBuildConfigTests.cmake)
+    if(MSVC AND CMAKE_GENERATOR MATCHES "^Ninja")
+        add_test(NAME msvc_header_dependencies COMMAND ${CMAKE_COMMAND}
+            "-DHTMSR_TEST_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DHTMSR_TEST_NINJA=${CMAKE_MAKE_PROGRAM}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/test/MsvcHeaderDependenciesTests.cmake")
+        set_tests_properties(msvc_header_dependencies PROPERTIES TIMEOUT 60)
+    endif()
     add_executable(htmsr_capture_tests
         test/HardwareTriggeredStereoCaptureTests.cpp
         test/GalvoCaptureWorkflowTests.cpp
@@ -301,6 +311,35 @@ if(HTMSR_BUILD_CAPTURE_TESTS)
         endif()
         add_test(NAME pointcloud_processing COMMAND htmsr_pointcloud_tests)
 
+        add_executable(htmsr_ribbon_window_tests
+            test/RibbonWindowControlsTests.cpp
+            src/app/resources/htmsr.qrc
+        )
+        target_link_libraries(htmsr_ribbon_window_tests PRIVATE htmsr_ribbon Qt5::Widgets Qt5::Svg)
+        if(MSVC)
+            target_compile_options(htmsr_ribbon_window_tests PRIVATE /utf-8)
+        endif()
+        add_test(NAME ribbon_window_controls COMMAND htmsr_ribbon_window_tests)
+        add_test(NAME ribbon_window_controls_hidpi COMMAND htmsr_ribbon_window_tests)
+
+        add_executable(htmsr_ribbon_navigation_tests
+            test/RibbonWorkspaceNavigationTests.cpp
+            src/app/ui/RibbonWorkspaceNavigation.cpp
+            src/app/ui/RibbonWorkspaceNavigation.h
+            src/app/ui/PointCloudViewWidget.cpp
+            src/app/ui/PointCloudViewWidget.h
+            src/app/ui/PointCloudSceneWidget.cpp
+            src/app/resources/htmsr.qrc
+        )
+        target_include_directories(htmsr_ribbon_navigation_tests PRIVATE src)
+        target_link_libraries(htmsr_ribbon_navigation_tests PRIVATE htmsr_core htmsr_ribbon Qt5::Widgets Qt5::Svg Qt5::Concurrent)
+        target_compile_definitions(htmsr_ribbon_navigation_tests PRIVATE HTMSR_WITH_VTK_VIEWER=0)
+        if(MSVC)
+            target_compile_options(htmsr_ribbon_navigation_tests PRIVATE /utf-8)
+        endif()
+        add_test(NAME ribbon_workspace_navigation COMMAND htmsr_ribbon_navigation_tests)
+        add_test(NAME ribbon_workspace_navigation_hidpi COMMAND htmsr_ribbon_navigation_tests)
+
         add_executable(htmsr_logging_tests
             test/LoggingTests.cpp
             src/app/services/FileLogSink.cpp
@@ -353,6 +392,13 @@ if(HTMSR_ENABLE_HIK_CAMERA)
 endif()
 
 add_executable(htmsr_app WIN32 ${HTMSR_APP_SOURCES})
+if(HTMSR_BUILD_CAPTURE_TESTS)
+    target_sources(htmsr_app PRIVATE test/MainWindowUiSmokeTests.cpp)
+    target_compile_definitions(htmsr_app PRIVATE HTMSR_ENABLE_UI_SMOKE_TEST=1)
+    add_test(NAME mainwindow_ui_startup COMMAND htmsr_app --ui-smoke-test)
+    set_tests_properties(mainwindow_ui_startup PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endif()
 
 target_include_directories(htmsr_app
     PRIVATE
@@ -401,7 +447,10 @@ file(GENERATE
     CONTENT "[Paths]\nPlugins = .\n")
 
 if(MSVC)
-    target_compile_options(htmsr_app PRIVATE /utf-8)
+    # Release 保持优化及匹配的 Release 依赖，同时保留应用自身的源码调用堆栈。
+    target_compile_options(htmsr_app PRIVATE /utf-8 "$<$<CONFIG:Release>:/Zi>")
+    target_link_options(htmsr_app PRIVATE "$<$<CONFIG:Release>:/DEBUG>"
+        "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
 endif()
 
 if(EXISTS "${HTMSR_WINDEPLOYQT_EXECUTABLE}")
@@ -449,11 +498,13 @@ if(HTMSR_QT_BIN_DIR)
         set(HTMSR_QT_PLATFORM_PLUGIN "qwindowsd.dll")
         set(HTMSR_QT_STYLE_PLUGIN "qwindowsvistastyled.dll")
         set(HTMSR_QT_ICON_PLUGIN "qsvgicond.dll")
+        set(HTMSR_QT_SVG_IMAGE_PLUGIN "qsvgd.dll")
         set(HTMSR_QT_TEST_PLUGIN "qoffscreend.dll")
     else()
         set(HTMSR_QT_PLATFORM_PLUGIN "qwindows.dll")
         set(HTMSR_QT_STYLE_PLUGIN "qwindowsvistastyle.dll")
         set(HTMSR_QT_ICON_PLUGIN "qsvgicon.dll")
+        set(HTMSR_QT_SVG_IMAGE_PLUGIN "qsvg.dll")
         set(HTMSR_QT_TEST_PLUGIN "qoffscreen.dll")
     endif()
 
@@ -462,10 +513,17 @@ if(HTMSR_QT_BIN_DIR)
             message(FATAL_ERROR "Qt offscreen test plugin is missing. Check Qt5_DIR in config/environment.ini: ${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_TEST_PLUGIN}")
         endif()
         # 测试插件路径也从所选 Qt 自动推导，避免依赖运行测试前手工设置环境变量。
-        set_tests_properties(config_files serial_diagnostics logging pointcloud_processing PROPERTIES
+        set_tests_properties(config_files serial_diagnostics logging pointcloud_processing
+            ribbon_window_controls ribbon_window_controls_hidpi PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${HTMSR_QT_PLUGINS_DIR}/platforms"
             TIMEOUT 60)
-        foreach(qt_test_target htmsr_config_tests htmsr_serial_diagnostics_tests htmsr_logging_tests htmsr_pointcloud_tests)
+        set_property(TEST ribbon_window_controls_hidpi APPEND PROPERTY ENVIRONMENT "QT_SCALE_FACTOR=1.5")
+        set_tests_properties(ribbon_workspace_navigation ribbon_workspace_navigation_hidpi PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${HTMSR_QT_PLUGINS_DIR}/platforms"
+            TIMEOUT 60)
+        set_property(TEST ribbon_workspace_navigation_hidpi APPEND PROPERTY ENVIRONMENT "QT_SCALE_FACTOR=1.5")
+        foreach(qt_test_target htmsr_config_tests htmsr_serial_diagnostics_tests htmsr_logging_tests
+            htmsr_pointcloud_tests htmsr_ribbon_window_tests htmsr_ribbon_navigation_tests htmsr_app)
             target_compile_definitions(${qt_test_target} PRIVATE
                 HTMSR_QT_TEST_PLUGIN_ROOT="${HTMSR_QT_PLUGINS_DIR}"
                 HTMSR_QT_TEST_PLUGIN="${HTMSR_QT_TEST_PLUGIN}")
@@ -482,6 +540,31 @@ if(HTMSR_QT_BIN_DIR)
                     "$<TARGET_FILE_DIR:${qt_test_target}>/platforms/${HTMSR_QT_TEST_PLUGIN}"
                 COMMENT "Deploying Qt offscreen plugin for ${qt_test_target}")
         endforeach()
+    endif()
+
+    if(WIN32)
+        set(HTMSR_QT_SVG_IMAGE_PLUGIN_PATH "${HTMSR_QT_PLUGINS_DIR}/imageformats/${HTMSR_QT_SVG_IMAGE_PLUGIN}")
+        if(NOT EXISTS "${HTMSR_QT_SVG_IMAGE_PLUGIN_PATH}")
+            message(FATAL_ERROR "Qt SVG image plugin is required for ribbon title-bar controls. Check Qt5_DIR in config/environment.ini: ${HTMSR_QT_SVG_IMAGE_PLUGIN_PATH}")
+        endif()
+        # SARibbon 的样式表通过 QImageReader 读取标题栏 SVG；qsvgicon.dll 图标引擎不能替代它。
+        # 独立部署目标在增量构建时也执行，不要求重新链接或关闭正在运行的主程序。
+        add_custom_target(htmsr_deploy_svg_images
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:htmsr_app>/imageformats"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HTMSR_QT_SVG_IMAGE_PLUGIN_PATH}"
+                "$<TARGET_FILE_DIR:htmsr_app>/imageformats/${HTMSR_QT_SVG_IMAGE_PLUGIN}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:Qt5::Svg>" "$<TARGET_FILE_DIR:htmsr_app>"
+            COMMENT "Deploying Qt SVG image decoder for ribbon title-bar controls"
+            VERBATIM)
+        add_dependencies(htmsr_app htmsr_deploy_svg_images)
+        if(TARGET htmsr_ribbon_window_tests)
+            add_dependencies(htmsr_ribbon_window_tests htmsr_deploy_svg_images)
+        endif()
+        if(TARGET htmsr_ribbon_navigation_tests)
+            add_dependencies(htmsr_ribbon_navigation_tests htmsr_deploy_svg_images)
+        endif()
     endif()
 
     if(EXISTS "${HTMSR_QT_PLUGINS_DIR}/platforms/${HTMSR_QT_PLATFORM_PLUGIN}")

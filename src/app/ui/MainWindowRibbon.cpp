@@ -3,12 +3,14 @@
 #include "app/ui/AcquisitionPanel.h"
 #include "app/ui/ImageViewWidget.h"
 #include "app/ui/LogPanel.h"
+#include "app/ui/PointCloudViewWidget.h"
+#include "app/ui/RibbonWorkspaceNavigation.h"
 
 #include <QAction>
-#include <QActionGroup>
 #include <QDockWidget>
 #include <QFile>
 #include <QKeySequence>
+#include <QLabel>
 #include <QMessageBox>
 #include <QTabWidget>
 #include <QTimer>
@@ -33,7 +35,9 @@ void MainWindow::applyWindowTheme()
 
 void MainWindow::showCentralPage(int index)
 {
-    if (index >= 0 && index < centralTabs_->count())
+    if (workspaceNavigation_)
+        workspaceNavigation_->showWorkspace(index);
+    else if (index >= 0 && index < centralTabs_->count())
         centralTabs_->setCurrentIndex(index);
 }
 
@@ -42,7 +46,7 @@ void MainWindow::showCentralPage(int index)
     输入：
         无；中央视图和 Dock 面板必须已经创建
     输出：
-        副作用：添加功能区页、快捷操作及文件菜单，默认显示采集与标定页
+        副作用：创建单排导航、页面功能按钮和文件菜单，默认显示双目页
 */
 void MainWindow::buildRibbon()
 {
@@ -52,6 +56,9 @@ void MainWindow::buildRibbon()
     ribbon->setTitleBarHeight(40);
     ribbon->setTabBarHeight(34);
     ribbon->showMinimumModeButton(true);
+    workspaceNavigation_ = new RibbonWorkspaceNavigation(ribbon, centralTabs_, this);
+    connect(workspaceNavigation_, &RibbonWorkspaceNavigation::workflowPageRequested,
+        acquisitionPanel_, &AcquisitionPanel::showWorkflowPage);
 
     using WorkflowAction = AcquisitionPanel::WorkflowAction;
     const auto workflow = [this](WorkflowAction id, const char* icon) {
@@ -74,31 +81,38 @@ void MainWindow::buildRibbon()
     addAction(loadCalibrationAction_);
     connect(loadCalibrationAction_, &QAction::triggered, this, &MainWindow::loadCalibration);
 
-    auto* fileCategory = ribbon->addCategoryPage(QString::fromUtf8("文件"));
-    fileCategory->setObjectName(QStringLiteral("fileCategory"));
-    auto* calibrationFiles = fileCategory->addPanel(QString::fromUtf8("标定文件"));
-    calibrationFiles->addLargeAction(loadCalibrationAction_);
-    calibrationFiles->addLargeAction(exportCalibration);
-    auto* resultFiles = fileCategory->addPanel(QString::fromUtf8("重建结果"));
-    resultFiles->addLargeAction(exportReconstruction);
-
     auto* fileMenu = new SARibbonMenu(this);
     fileMenu->addAction(loadCalibrationAction_);
     fileMenu->addAction(exportCalibration);
     fileMenu->addAction(exportReconstruction);
     fileMenu->addSeparator();
+    fileMenu->addAction(pointCloudView_->findChild<QAction*>(QStringLiteral("cloudLoad")));
+    fileMenu->addAction(pointCloudView_->findChild<QAction*>(QStringLiteral("cloudExport")));
+    fileMenu->addSeparator();
     auto* exitAction = fileMenu->addAction(QString::fromUtf8("退出"));
     connect(exitAction, &QAction::triggered, this, &QWidget::close);
     if (auto* applicationButton = qobject_cast<QToolButton*>(ribbon->applicationButton())) {
         applicationButton->setObjectName(QStringLiteral("htmsrApplicationButton"));
-        applicationButton->setText(QStringLiteral("HTMSR"));
+        applicationButton->setText(QString::fromUtf8("文件"));
         applicationButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
         applicationButton->setPopupMode(QToolButton::InstantPopup);
         applicationButton->setMenu(fileMenu);
     }
 
-    auto* acquisitionCategory = ribbon->addCategoryPage(QString::fromUtf8("采集与标定"));
-    acquisitionCategory->setObjectName(QStringLiteral("acquisitionCategory"));
+    auto* stereoCategory = workspaceNavigation_->category(QStringLiteral("stereoCategory"));
+    auto* liveDevices = stereoCategory->addPanel(QString::fromUtf8("设备"));
+    liveDevices->addLargeAction(refresh);
+    auto* liveDisplay = stereoCategory->addPanel(QString::fromUtf8("双目预览"));
+    auto* fitImages = new QAction(ribbonIcon("fit"), QString::fromUtf8("图像适应窗口"), this);
+    fitImages->setObjectName(QStringLiteral("fitLiveImagesAction"));
+    liveDisplay->addLargeAction(fitImages);
+    connect(fitImages, &QAction::triggered, this, [this]() {
+        showCentralPage(0);
+        liveLeftImageView_->fitToView();
+        liveRightImageView_->fitToView();
+    });
+
+    auto* acquisitionCategory = workspaceNavigation_->category(QStringLiteral("acquisitionCategory"));
     auto* devices = acquisitionCategory->addPanel(QString::fromUtf8("设备"));
     devices->addLargeAction(refresh);
     auto* calibration = acquisitionCategory->addPanel(QString::fromUtf8("双目标定"));
@@ -107,35 +121,53 @@ void MainWindow::buildRibbon()
     calibration->addLargeAction(loadCalibrationAction_);
     calibration->addSmallAction(exportCalibration);
 
-    auto* reconstructionCategory = ribbon->addCategoryPage(QString::fromUtf8("重建"));
-    reconstructionCategory->setObjectName(QStringLiteral("reconstructionCategory"));
+    auto* reconstructionCategory = workspaceNavigation_->category(QStringLiteral("reconstructionCategory"));
     auto* scan = reconstructionCategory->addPanel(QString::fromUtf8("扫描与重建"));
     scan->addLargeAction(captureReconstruction);
     scan->addLargeAction(reconstruct);
     scan->addLargeAction(exportReconstruction);
 
-    auto* viewCategory = ribbon->addCategoryPage(QString::fromUtf8("视图"));
-    viewCategory->setObjectName(QStringLiteral("viewCategory"));
-    auto* pages = viewCategory->addPanel(QString::fromUtf8("工作区"));
-    auto* pageGroup = new QActionGroup(this);
-    pageGroup->setExclusive(true);
-    const QStringList titles = {
-        QString::fromUtf8("双目预览"), QString::fromUtf8("点云视图"), QString::fromUtf8("采集筛选"),
-        QString::fromUtf8("激光线"), QString::fromUtf8("串口命令")
-    };
-    const char* icons[] = {"camera", "cloud", "capture", "laser", "command"};
-    for (int index = 0; index < centralTabs_->count(); ++index) {
-        auto* action = new QAction(ribbonIcon(icons[index]), titles.at(index), pageGroup);
-        action->setObjectName(QStringLiteral("showCentralPage%1Action").arg(index));
-        action->setCheckable(true);
-        action->setChecked(centralTabs_->currentIndex() == index);
-        pages->addLargeAction(action);
-        connect(action, &QAction::triggered, this, [this, index]() { showCentralPage(index); });
-        connect(centralTabs_, &QTabWidget::currentChanged, action, [action, index](int current) {
-            action->setChecked(current == index);
-        });
+    auto* cloudFiles = workspaceNavigation_->category(QStringLiteral("cloudCategory"))
+                           ->addPanel(QString::fromUtf8("点云文件"));
+    for (const auto& name : {QStringLiteral("cloudLoad"), QStringLiteral("cloudExport")}) {
+        auto* action = pointCloudView_->findChild<QAction*>(name);
+        action->setIcon(ribbonIcon(name == QStringLiteral("cloudLoad") ? "open" : "export"));
+        cloudFiles->addLargeAction(action);
     }
+    auto* cloudView = workspaceNavigation_->category(QStringLiteral("cloudCategory"))
+                          ->addPanel(QString::fromUtf8("观察"));
+    auto* focusCloud = pointCloudView_->findChild<QAction*>(QStringLiteral("cloudFocus"));
+    focusCloud->setIcon(ribbonIcon("fit"));
+    cloudView->addLargeAction(focusCloud);
 
+    auto* capture = workspaceNavigation_->category(QStringLiteral("captureCategory"))
+                        ->addPanel(QString::fromUtf8("采集操作"));
+    capture->addLargeAction(captureCalibration);
+    capture->addLargeAction(captureReconstruction);
+
+    auto* laser = workspaceNavigation_->category(QStringLiteral("laserCategory"))
+                      ->addPanel(QString::fromUtf8("激光线诊断"));
+    auto* laserSettings = new QAction(ribbonIcon("scan"), QString::fromUtf8("重建设置"), this);
+    laser->addLargeAction(laserSettings);
+    connect(laserSettings, &QAction::triggered, this, [this]() {
+        acquisitionDock_->show();
+        acquisitionDock_->raise();
+        acquisitionPanel_->showWorkflowPage(1);
+    });
+    auto* laserHint = new QLabel(QString::fromUtf8("在右侧重建参数中启用“保存并加载激光线图片”，\n重建结束后在本页查看左右提线结果。"));
+    laser->addLargeWidget(laserHint);
+
+    auto* commands = workspaceNavigation_->category(QStringLiteral("commandCategory"))
+                         ->addPanel(QString::fromUtf8("串口命令"));
+    auto* commandSettings = new QAction(ribbonIcon("panel"), QString::fromUtf8("硬件参数"), this);
+    commands->addLargeAction(commandSettings);
+    connect(commandSettings, &QAction::triggered, this, [this]() {
+        acquisitionDock_->show();
+        acquisitionDock_->raise();
+    });
+    commands->addLargeWidget(new QLabel(QString::fromUtf8("在下方编辑并发送单条指令或命令包。\n切换到本页不会自动发送设备命令。")));
+
+    auto* viewCategory = workspaceNavigation_->category(QStringLiteral("viewCategory"));
     auto* panels = viewCategory->addPanel(QString::fromUtf8("面板"));
     auto* workflowPanel = acquisitionDock_->toggleViewAction();
     workflowPanel->setIcon(ribbonIcon("panel"));
@@ -161,20 +193,13 @@ void MainWindow::buildRibbon()
     });
 
     auto* display = viewCategory->addPanel(QString::fromUtf8("显示"));
-    auto* fitImages = new QAction(ribbonIcon("fit"), QString::fromUtf8("图像适应窗口"), this);
-    fitImages->setObjectName(QStringLiteral("fitLiveImagesAction"));
     display->addLargeAction(fitImages);
-    connect(fitImages, &QAction::triggered, this, [this]() {
-        showCentralPage(0);
-        liveLeftImageView_->fitToView();
-        liveRightImageView_->fitToView();
-    });
     auto* clearMessages = new QAction(ribbonIcon("log"), QString::fromUtf8("清空消息"), this);
     clearMessages->setToolTip(QString::fromUtf8("清空当前消息面板，磁盘日志继续保留。"));
     display->addSmallAction(clearMessages);
     connect(clearMessages, &QAction::triggered, logPanel_, &LogPanel::clear);
 
-    auto* helpCategory = ribbon->addCategoryPage(QString::fromUtf8("帮助"));
+    auto* helpCategory = workspaceNavigation_->category(QStringLiteral("helpCategory"));
     auto* help = helpCategory->addPanel(QString::fromUtf8("使用帮助"));
     auto* helpAction = new QAction(ribbonIcon("help"), QString::fromUtf8("操作指南"), this);
     help->addLargeAction(helpAction);
@@ -191,11 +216,7 @@ void MainWindow::buildRibbon()
     ribbon->quickAccessBar()->addAction(refresh);
     ribbon->quickAccessBar()->addAction(loadCalibrationAction_);
     ribbon->quickAccessBar()->addAction(exportReconstruction);
-    connect(ribbon, &SARibbonBar::currentRibbonTabChanged, this, [this](int index) {
-        if (index == 1 || index == 2)
-            acquisitionPanel_->showWorkflowPage(index - 1);
-    });
-    ribbon->setCurrentIndex(1);
+    workspaceNavigation_->showWorkspace(0);
     // SARibbon 在事件循环完成布局后再次应用主题，保证标题栏和系统按钮一致。
     QTimer::singleShot(0, this, &MainWindow::applyWindowTheme);
 }

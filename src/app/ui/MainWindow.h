@@ -57,19 +57,23 @@ class LogPanel;
 class PointCloudViewWidget;
 class SerialCommandPackWidget;
 class ConfigAutoSave;
+class RibbonWorkspaceNavigation;
 
 class MainWindow final : public SARibbonMainWindow {
     Q_OBJECT
 
 public:
+    // 界面测试构建真实控件，但不加载/保存工程参数、不枚举设备或启动预览。
+    enum class StartupMode { Normal, InterfaceTest };
     /*
         函数功能：构造主窗口，初始化 Dock 区域、中央视图、日志、配置和采集入口
         输入：
             parent：Qt 父窗口
+            startupMode：正常启动，或无设备、无配置写入的界面测试
         输出：
             无
     */
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(QWidget* parent = nullptr, StartupMode startupMode = StartupMode::Normal);
     ~MainWindow() override;
 
 protected:
@@ -156,6 +160,7 @@ private:
     QDockWidget* acquisitionDock_ = nullptr;
     QDockWidget* logDock_ = nullptr;
     QTabWidget* centralTabs_ = nullptr;
+    RibbonWorkspaceNavigation* workspaceNavigation_ = nullptr;
     QAction* loadCalibrationAction_ = nullptr;
     LogPanel* logPanel_ = nullptr;
     PointCloudViewWidget* pointCloudView_ = nullptr;
